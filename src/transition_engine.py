@@ -125,15 +125,17 @@ class TransitionEngine:
         """
         candidates = []
         
-        # Default Weights - FIXED TO 4 BARS ONLY
+        # Default Weights
         if not weights:
             weights = {
                 'types': {'crossfade': 0.5, 'bass_swap': 1.6, 'cut': 1.2, 'filter_fade': 1.0, 'mashup': 1.0},
-                'bars': {4: 1.0}  # Only 4 bars
+                'bars': {4: 1.0, 8: 1.3}
             }
-        
-        # Force 4 bars only
-        weights['bars'] = {4: 1.0}
+        else:
+            weights = {
+                'types': weights.get('types', {'crossfade': 1.0, 'bass_swap': 1.0, 'cut': 1.0, 'filter_fade': 1.0, 'mashup': 1.0}),
+                'bars': weights.get('bars', {4: 1.0, 8: 1.3})
+            }
         
         segs_a = track_a.get('segments', [])
         segs_b = track_b.get('segments', [])
@@ -145,13 +147,18 @@ class TransitionEngine:
         if not segs_b: segs_b = [{'time': 0, 'label': 'Intro', 'energy': 0.5}]
 
         # --- Helper: Grid Snapping ---
+        beat_array_cache = {}
+
         def snap_to_grid(time_val, beat_times, grid_beats=16):
-            """ 
-            Strictly snaps to 4-bar boundaries (16 beats) for Hip-Hop.
-            This ensures we don't break the natural 1 2 3 4 rhythm.
-            """
-            if not beat_times: return time_val
-            closest_idx = (np.abs(np.array(beat_times) - time_val)).argmin()
+            """Snap to musical grid in beat domain."""
+            if not beat_times:
+                return time_val
+            cache_key = id(beat_times)
+            beat_arr = beat_array_cache.get(cache_key)
+            if beat_arr is None:
+                beat_arr = np.array(beat_times)
+                beat_array_cache[cache_key] = beat_arr
+            closest_idx = (np.abs(beat_arr - time_val)).argmin()
             # Snap to nearest multiple of 16 (4 bars)
             snapped_idx = int(round(closest_idx / grid_beats) * grid_beats)
             
@@ -264,7 +271,7 @@ class TransitionEngine:
                     seg_beat_indices = np.where(seg_beats_mask)[0]
                     
                     if len(seg_beat_indices) > 4:
-                        energy_curve = track_a.get('energy_curve', [])
+                        energy_curve = track_a.get('energy', [])
                         if len(energy_curve) > 0 and len(seg_beat_indices) > 0:
                             seg_energies = [energy_curve[i] if i < len(energy_curve) else 0.5 for i in seg_beat_indices]
                             peak_idx = np.argmax(seg_energies)
