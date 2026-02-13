@@ -11,7 +11,7 @@ from src.analyzer_engine import AudioAnalyzer
 from src.stem_separator import StemSeparator
 from src.transition_engine import TransitionEngine
 from src.mix_renderer import MixRenderer
-from src.utils import ensure_dirs, logger
+from src.utils import ensure_dirs, logger, get_file_hash
 import json
 import zipfile
 
@@ -81,6 +81,7 @@ if 'final_mix_result' not in st.session_state:
 def load_tracks(uploaded_files):
     import time as time_module
     tracks = []
+    seen_hashes = set()
     
     # Save uploaded files to temp/cache so we can access by path
     temp_dir = Path("cache/uploads")
@@ -106,8 +107,13 @@ def load_tracks(uploaded_files):
         # Analyze
         # Skip stem separation for now due to TorchCodec dependency issues
         try:
+            file_hash = get_file_hash(str(file_path))
+            if file_hash in seen_hashes:
+                status_text.text(f"⏭️ Skipping duplicate: {uploaded_file.name}")
+                continue
+            seen_hashes.add(file_hash)
+
             stems = {}  # Empty stems dict - skip Demucs
-            
             analysis = analyzer.analyze_track(str(file_path), stems)
             analysis['filename'] = uploaded_file.name
             analysis['filepath'] = str(file_path)
@@ -166,7 +172,7 @@ with st.sidebar:
             )
         
         st.write("**Bar Lengths:**")
-        st.caption("⚠️ Crossfade & Mashup restricted to 4 bars")
+        st.caption("4/8 bar transition preference (learned + manual tuning)")
         for bars in [4, 8]:
             st.session_state['bar_weights'][bars] = st.slider(
                 f"{bars} Bars",
@@ -241,17 +247,29 @@ if st.session_state['playlist']:
                     status.write("🎯 Step 1: Optimizing track order for harmonic & energy flow...")
                     playlist = st.session_state['playlist']
                     type_w, bar_w = st.session_state['type_weights'], st.session_state['bar_weights']
-                    energy_pref = type_w.get('energy_build', 1.0) 
+                    energy_pref = type_w.get('energy_build', 1.0)
+
+                    notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+                    note_to_idx = {n: i for i, n in enumerate(notes)}
+
+                    def normalize_energy(track):
+                        raw = track.get('energy', 0.5)
+                        if isinstance(raw, list):
+                            return sum(raw) / len(raw) if raw else 0.5
+                        return float(raw)
 
                     def get_key_distance(key1, key2):
-                        notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
                         try:
-                            root1 = key1.split(' ')[0]; root2 = key2.split(' ')[0]
-                            idx1 = notes.index(root1); idx2 = notes.index(root2)
+                            root1 = key1.split(' ')[0]
+                            root2 = key2.split(' ')[0]
+                            idx1 = note_to_idx[root1]
+                            idx2 = note_to_idx[root2]
                             diff = abs(idx1 - idx2)
-                            if diff > 6: diff = 12 - diff
+                            if diff > 6:
+                                diff = 12 - diff
                             return diff
-                        except: return 6
+                        except Exception:
+                            return 6
                     
                     sorted_playlist = [playlist[0]]
                     remaining = playlist[1:]
@@ -259,10 +277,7 @@ if st.session_state['playlist']:
                         current = sorted_playlist[-1]
                         current_bpm = current['bpm']
                         current_key = current.get('key', 'C Major')
-                        current_energy_raw = current.get('energy', 0.5)
-                        if isinstance(current_energy_raw, list):
-                            current_energy = sum(current_energy_raw) / len(current_energy_raw) if current_energy_raw else 0.5
-                        else: current_energy = current_energy_raw
+                        current_energy = normalize_energy(current)
                         
                         scores = []
                         for track in remaining:
@@ -271,10 +286,7 @@ if st.session_state['playlist']:
                             score += max(0, 60 - (dist * 10))
                             bpm_diff = abs(track['bpm'] - current_bpm)
                             score += max(0, 20 - bpm_diff)
-                            track_energy_raw = track.get('energy', 0.5)
-                            if isinstance(track_energy_raw, list):
-                                track_energy = sum(track_energy_raw) / len(track_energy_raw) if track_energy_raw else 0.5
-                            else: track_energy = track_energy_raw
+                            track_energy = normalize_energy(track)
                             energy_diff = track_energy - current_energy
                             if energy_diff > 0: score += (energy_diff * 40 * energy_pref)
                             else: score += (energy_diff * 10)
@@ -297,7 +309,7 @@ if st.session_state['playlist']:
                     best_full_plan_cands = []
                     best_full_selections = []
 
-                    num_scenarios = 5 # Optimized efficiency sweet spot
+                    num_scenarios = min(5, max(3, total_pairs + 1))  # adaptive for speed/quality balance
                     for plan_idx in range(num_scenarios):
                         status.write(f"Evaluating scenario {plan_idx+1}/{num_scenarios}...")
                         plan_score = 0

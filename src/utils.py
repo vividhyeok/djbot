@@ -30,12 +30,31 @@ STEMS_DIR.mkdir(exist_ok=True)
 
 
 def get_file_hash(filepath: str) -> str:
-    """Calculates partial MD5 of a file for efficient caching."""
+    """
+    Calculates a stable file hash for caching.
+
+    Uses file content (head/tail chunks + size) instead of path/mtime so the
+    same audio uploaded again can reuse analysis cache even when copied to a
+    new temp path.
+    """
     filepath = Path(filepath)
     stat = filepath.stat()
-    # Hash based on path, size, mtime (fast check)
-    identifier = f"{filepath.absolute()}_{stat.st_size}_{stat.st_mtime}"
-    return hashlib.md5(identifier.encode()).hexdigest()
+    file_size = stat.st_size
+    chunk_size = 1024 * 1024  # 1MB
+
+    md5 = hashlib.md5()
+    md5.update(str(file_size).encode("utf-8"))
+
+    with open(filepath, "rb") as f:
+        head = f.read(chunk_size)
+        md5.update(head)
+
+        if file_size > chunk_size:
+            f.seek(max(0, file_size - chunk_size))
+            tail = f.read(chunk_size)
+            md5.update(tail)
+
+    return md5.hexdigest()
 
 def save_json(data, filepath):
     with open(filepath, 'w', encoding='utf-8') as f:
