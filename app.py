@@ -217,15 +217,15 @@ if st.session_state['playlist']:
             
             # Manual Highlight (Advanced)
             with st.expander(f"🎛️ Manual 구간 설정 (Track {i+1})"):
-                dur = track['duration']
+                dur = float(track['duration'])
                 
                 # Default values if not set
-                cur_in = track.get('manual_in', 0.0)
-                cur_out = track.get('manual_out', dur)
+                cur_in = float(track.get('manual_in', 0.0))
+                cur_out = float(track.get('manual_out', dur))
                 
                 # Slider for In/Out points
-                m_in = st.slider(f"Mix-In 시작 (초)", 0.0, dur, float(cur_in), step=1.0, key=f"in_{i}")
-                m_out = st.slider(f"Mix-Out 종료 (초)", 0.0, dur, float(cur_out), step=1.0, key=f"out_{i}")
+                m_in = st.slider(f"Mix-In 시작 (초)", 0.0, dur, cur_in, step=1.0, key=f"in_{i}")
+                m_out = st.slider(f"Mix-Out 종료 (초)", 0.0, dur, cur_out, step=1.0, key=f"out_{i}")
                 
                 if m_in != cur_in: 
                     track['manual_in'] = m_in

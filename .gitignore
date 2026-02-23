@@ -1,9 +1,40 @@
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-env/
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
 venv/
-.env
+env/
+
+# Cache & Output
 cache/
 output/
 *.log
+
+# Go worker logs
+goworker_stdout.txt
+goworker_stderr.txt
+
+# Test files
+mp3fortest/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Streamlit
+.streamlit/
+
+# Preference weights (user-specific)
+preference_weights.json

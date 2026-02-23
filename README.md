@@ -1,181 +1,123 @@
-# DJ Bot 재빌드 제안서 (Python → Go)
+# 🎧 DJ Bot — 자동 DJ 믹스 생성기
 
-현재 시스템의 **기능은 100% 유지**하면서, 체감되는 무거움/지연/비효율을 줄이기 위한 **Go 기반 재빌드 전략** 문서입니다.
+YouTube 재생목록 또는 로컬 음악 파일을 입력하면, 자동으로 분석 → 하모닉 정렬 → 크로스페이드 믹싱하여 하나의 DJ 믹스 MP3를 생성합니다.
 
----
+## ✨ 주요 기능
 
-## 한 줄 결론
+- **YouTube 재생목록 다운로드** — YouTube/YouTube Music 재생목록 URL 입력 → 자동 다운로드
+- **Camelot Wheel 하모닉 정렬** — Key + BPM 기반 최적 트랙 순서 자동 결정
+- **8바 크로스페이드 믹싱** — BPM 기반 자연스러운 전환 (곡당 ~60초 하이라이트)
+- **Go 기반 고속 분석** — BPM, Key, 에너지, 구조(Intro/Verse/Chorus/Bridge/Outro) 자동 감지
+- **LRC 트랙리스트** — 믹스 MP3와 함께 타임스탬프 트랙리스트 생성
+- **중복 곡 자동 제거** — 같은 제목의 중복 트랙 필터링
 
-**재빌드는 충분히 타당합니다.**
-특히 현재 병목이 I/O + 동시성 + 프로세스 오케스트레이션 + 캐시 관리에 있다면 Go 전환 시 이득이 큽니다.
+## 🏗️ 아키텍처
 
-다만, 오디오/ML 생태계의 즉시 생산성은 Python이 강하므로, **"전면 교체"보다 "핵심 경로부터 단계적 전환"**이 리스크 대비 효과가 좋습니다.
+```
+djbot/
+├── app_auto.py              # Streamlit 메인 앱 (자동 믹스)
+├── app.py                   # Streamlit 메인 앱 (수동 믹스)
+├── src/
+│   ├── analyzer_engine.py   # 오디오 분석 (BPM, Key, 에너지, 구조)
+│   ├── transition_engine.py # 전환 후보 생성 및 선택
+│   ├── mix_renderer.py      # 믹스 렌더러 (WAV 변환 + pydub 크로스페이드)
+│   ├── youtube_downloader.py# YouTube 재생목록 다운로드 (yt-dlp)
+│   ├── go_bridge.py         # Go worker 프로세스 관리
+│   ├── stem_separator.py    # 스템 분리 (선택사항)
+│   └── utils.py             # 유틸리티 함수 및 로깅
+├── goworker/
+│   ├── main.go              # Go HTTP 서버 (분석 API)
+│   ├── analyzer.go          # BPM/Key/에너지 분석
+│   ├── dsp.go               # DSP 함수 (FFT, 필터)
+│   ├── renderer.go          # Go 믹스 렌더러
+│   ├── types.go             # 타입 정의
+│   └── goworker.exe         # 컴파일된 바이너리
+└── output/                  # 생성된 믹스 파일
+```
 
----
+## 🔧 설치
 
-## 왜 느리고 무겁게 느껴지는가 (추정 병목)
+### 요구사항
+- Python 3.10+
+- Go 1.21+ (goworker 빌드 시)
 
-현재 구조(Streamlit + Python 오디오 처리)는 빠르게 제품화하기 좋지만, 아래 상황에서 비용이 커집니다.
+### Python 패키지
 
-1. **파일 단위 대기 시간 누적**
-   - 분석, 전환 후보 생성, 렌더링이 순차적으로 묶이면 전체 지연이 길어짐
-2. **CPU 바운드 구간의 GIL 영향/멀티프로세스 오버헤드**
-   - 대량 트랙 처리 시 워커 관리 비용 증가
-3. **외부 도구(ffmpeg) 호출 오케스트레이션 비용**
-   - 다수 커맨드 실행/중간 파일 관리에서 병목 발생
-4. **UI-엔진 결합도**
-   - Streamlit 세션 단위 상태와 엔진 로직이 가까우면 확장 시 불리
-5. **캐시 키/데이터 수명 관리 복잡성**
-   - 결과 재사용은 좋지만, invalidation과 스토리지 제어가 어려워짐
+```bash
+pip install streamlit pydub librosa yt-dlp imageio-ffmpeg scipy numpy soundfile
+```
 
----
+> `imageio-ffmpeg`이 ffmpeg 바이너리를 자동으로 설치합니다. 별도 ffmpeg 설치 불필요.
 
-## Go 재빌드 시 기대효과
+### Go Worker 빌드 (선택사항)
 
-### 1) 동시성/처리량 개선
-- goroutine + worker pool로 다중 파일 분석 파이프라인 단순화
-- 채널 기반 backpressure로 메모리 폭주 방지
+```bash
+cd goworker
+go build -o goworker.exe .
+```
 
-### 2) 운영 안정성
-- 단일 정적 바이너리 배포(환경 편차 축소)
-- 표준 라이브러리 기반 로깅/프로파일링/HTTP 서버 일관성
+> 사전 빌드된 `goworker.exe`가 이미 포함되어 있습니다.
 
-### 3) 구조 표준화 용이
-- 계층 분리(API, 도메인, 인프라)
-- 모듈 경계 명확화로 테스트/유지보수 개선
+## 🚀 실행
 
-### 4) 확장성
-- 향후 배치 분석, 큐 기반 비동기 처리, 멀티 인스턴스 스케일링에 유리
+```bash
+# 자동 믹스 모드 (권장)
+python -m streamlit run app_auto.py
 
----
+# 수동 믹스 모드
+python -m streamlit run app.py
+```
 
-## 전제: “기능 전부 유지”를 위한 아키텍처 원칙
+브라우저에서 `http://localhost:8501` 접속
 
-1. **기능 동등성(FEATURE PARITY) 우선**
-   - UI에서 보이는 동작/출력 포맷(MP3/LRC/ZIP) 완전 동일
-2. **오디오 결과 허용 오차 정의**
-   - 샘플 정확히 bit-identical이 어렵다면, 객관식 메트릭으로 동등성 판정
-3. **회귀 테스트 우선 구축 후 이관**
-   - 기존 Python 결과를 Golden dataset으로 저장
-4. **단계별 트래픽 전환**
-   - Shadow run → Canary → Full cutover
+## 📖 사용법
 
----
+### 자동 믹스 (app_auto.py)
 
-## 권장 타깃 아키텍처 (Go)
+1. 좌측 사이드바에서 **YouTube 재생목록 URL** 입력
+2. **"🚀 다운로드 & 자동 믹스"** 클릭
+3. 자동으로 다운로드 → 분석 → 하모닉 정렬 → 믹스 계획
+4. **"🎧 최종 믹스 렌더링"** 클릭으로 MP3 생성
+5. ZIP 다운로드 (MP3 + LRC 트랙리스트)
 
-### 컴포넌트
-- **API Gateway (Go)**: 업로드/작업 요청/상태 조회/다운로드
-- **Analyzer Worker (Go)**: BPM/키/에너지/하이라이트 분석 오케스트레이션
-- **Transition Engine (Go)**: 후보 생성 및 점수화
-- **Render Worker (Go + ffmpeg)**: 프리뷰/최종 믹스 생성
-- **Metadata Store (PostgreSQL/SQLite)**: 트랙/분석/작업 상태
-- **Object Storage (로컬 or S3 호환)**: 원본/산출물 저장
-- **Cache Layer (Redis optional)**: 중간 결과/중복 업로드 제거
+### 수동 믹스 (app.py)
 
-### 인터페이스
-- REST(또는 gRPC) + 작업 큐 패턴
-- Job 상태: `queued -> running -> done/failed`
-- 재시도 가능하도록 idempotency key 적용
+1. MP3/WAV 파일 업로드
+2. Go worker가 자동 분석 (BPM, Key, 구조)
+3. 트랙 순서 조정 및 전환 편집
+4. In/Out 포인트 수동 설정 가능
 
----
+## 🎛️ 믹싱 알고리즘
 
-## 기술 스택 제안
+### Camelot Wheel 하모닉 정렬
+Key 호환성을 Camelot Wheel 기준으로 점수화:
+- **같은 키 / 관계조**: 100점
+- **인접 위치 (±1)**: 80점
+- **2단계 거리**: 40점
 
-- **웹/API**: `chi` 또는 `gin`
-- **백그라운드 잡**: `asynq`(Redis) 또는 자체 worker pool
-- **설정 관리**: `viper` 또는 환경변수 표준화
-- **로깅/추적**: `zap` + OpenTelemetry
-- **오디오 처리**:
-  - 1차: ffmpeg 커맨드 오케스트레이션(안정)
-  - 2차: 필요 시 C/C++ DSP 라이브러리 바인딩
-- **프론트엔드/UI**:
-  - 빠른 전환: 기존 Streamlit 유지 + Go API 연결
-  - 중장기: React/Next.js 등으로 분리
+### BPM 매칭
+- **±3 BPM 이내**: 50점
+- **±8 BPM 이내**: 35점
+- **±25 BPM 초과**: -30점 (페널티)
 
----
+### 크로스페이드
+- 8바 기준 크로스페이드 (BPM에 비례)
+- pydub 네이티브 크로스페이드 사용 → 정확한 타이밍
+- 모든 트랙 WAV 프리컨버팅 → 타이밍 드리프트 제거
 
-## 마이그레이션 전략 (현실적인 순서)
+## 📋 기술 스택
 
-### Phase 0. 기준선 고정 (1~2주)
-- 현행 기능 목록/입출력 스펙 동결
-- 대표 100~500곡 Golden dataset 구축
-- 성능 KPI 정의
-  - 분석 p50/p95
-  - 10곡 믹스 총 소요시간
-  - 실패율
+| 구성요소 | 기술 |
+|---------|------|
+| UI | Streamlit 1.52 |
+| 오디오 분석 | Go worker (FFT, autocorrelation) |
+| 오디오 렌더링 | pydub + ffmpeg (via imageio-ffmpeg) |
+| 다운로드 | yt-dlp |
+| Key 감지 | Krumhansl-Schmuckler algorithm |
+| 비트 감지 | Onset detection + autocorrelation |
 
-### Phase 1. 백엔드 분리 (2~3주)
-- Python UI는 유지
-- Go로 업로드/작업 API/상태 관리만 먼저 이관
-- 기존 Python 엔진을 서브프로세스로 호출해 결과 동일성 확보
+## ⚠️ 참고
 
-### Phase 2. 분석 엔진 이관 (3~5주)
-- BPM/키/에너지 계산 루틴부터 Go 이식
-- 결과 비교 테스트 자동화
-
-### Phase 3. 전환 엔진 이관 (2~4주)
-- 현재 점수식/가중치 로직 동일 재현
-- A/B 결과 리포트로 품질 편차 확인
-
-### Phase 4. 렌더러 이관 (2~4주)
-- ffmpeg 파이프라인을 Go에서 직접 오케스트레이션
-- 프리뷰/최종 결과물 생성 경로 통합
-
-### Phase 5. 컷오버 및 최적화 (1~2주)
-- Canary 10% → 50% → 100%
-- 병목 구간 pprof 튜닝
-
----
-
-## 유지해야 할 호환성 체크리스트
-
-- [ ] 출력 파일명 규칙 동일
-- [ ] MP3 인코딩 옵션(320kbps 등) 동일
-- [ ] LRC 타임코드 포맷 동일
-- [ ] 전환 방식(crossfade/bass swap/cut/filter/mashup) 동일
-- [ ] 가중치 학습 결과 반영 방식 동일
-- [ ] 중복 업로드 스킵 정책 동일
-- [ ] 캐시 히트/미스 정책 문서화
-
----
-
-## 리스크와 대응
-
-1. **오디오 라이브러리 성숙도 차이**
-   - 대응: 핵심 DSP는 초기에 ffmpeg 중심으로 유지
-2. **완전 동일한 음질/타이밍 재현 난이도**
-   - 대응: 허용 오차 기반 품질 게이트 도입
-3. **초기 개발 속도 저하**
-   - 대응: 단계적 이관 + Python UI 유지
-4. **팀 러닝커브**
-   - 대응: 템플릿 저장소/코드 규약/리뷰 체크리스트 사전 준비
-
----
-
-## 권장 실행안 (의사결정)
-
-- “지금 당장 전면 교체”는 비추천
-- 대신 아래를 추천:
-  1. **Go Control Plane 먼저 도입**(API/큐/상태관리)
-  2. **가장 느린 hot path부터 이식**(분석 → 렌더링)
-  3. **기능 동등성 테스트 통과 시 단계적 전환**
-
-이 방식이면 기능 손실 없이 속도/안정성/표준성을 동시에 확보할 가능성이 가장 높습니다.
-
----
-
-## 부록: 성공 판단 KPI 예시
-
-- 분석 처리량: 기존 대비 **2~4배 개선**
-- 대기열 처리 안정성: 실패율 **1% 미만**
-- 동일 입력 대비 품질 편차: 내부 기준 통과율 **99%+**
-- 장애 복구 시간(MTTR): 기존 대비 **50% 단축**
-
----
-
-원하시면 다음 단계로, 위 계획을 바로 실행 가능한 수준으로 쪼개서
-- 이슈 트래커용 작업 단위(주차별)
-- API 스펙 초안
-- Golden dataset 테스트 설계
-까지 이어서 작성해드릴 수 있습니다.
+- YouTube Music URL (`music.youtube.com`)은 자동으로 `www.youtube.com`으로 변환됩니다
+- Chrome이 실행 중이면 쿠키 접근이 제한될 수 있습니다 (403 에러 시 Chrome 종료 후 재시도)
+- 첫 실행 시 WAV 변환에 시간이 걸리지만, 이후 캐시됩니다

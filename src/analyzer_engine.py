@@ -26,12 +26,27 @@ class AudioAnalyzer:
     def analyze_track(self, filepath: str, stems_dir: Optional[str] = None) -> Dict:
         """
         Full analysis pipeline:
-        1. Check cache.
-        2. Load Audio.
-        3. Extract Beats/BPM.
-        4. Extract Energy.
-        5. Detect Highlights.
+        1. Try Go worker (parallel, fast).
+        2. Fallback: Check cache.
+        3. Load Audio.
+        4. Extract Beats/BPM.
+        5. Extract Energy.
+        6. Detect Highlights.
         """
+        # --- Try Go worker first ---
+        try:
+            from src.go_bridge import get_worker
+            worker = get_worker()
+            if worker.available:
+                result = worker.analyze_track(filepath)
+                if result and result.get('duration', 0) > 0:
+                    logger.info(f"[Go] Analysis complete: {filepath}")
+                    return result
+                logger.warning(f"[Go] Analysis returned empty, falling back to Python")
+        except Exception as e:
+            logger.debug(f"[Go] Bridge unavailable: {e}")
+
+        # --- Python fallback ---
         file_hash = get_file_hash(filepath)
         cache_path = CACHE_DIR / f"{file_hash}_analysis.json"
         
