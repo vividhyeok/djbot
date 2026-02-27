@@ -1,40 +1,32 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
-*.egg
-.venv/
-venv/
-env/
+# Node
+node_modules/
+package-lock.json
 
-# Cache & Output
-cache/
+# Tauri
+app/src-tauri/target/
+app/src-tauri/gen/
+app/src-tauri/cache/
+
+# Go Backend
+backend/backend.exe
+backend/goworker.exe
+backend/testdl/
+backend/uploads/
+backend/output/
+backend/cache/
+
+# Media / Outputs
+*.mp3
+*.wav
+*.zip
+*.lrc
 output/
-*.log
+cache/
 
-# Go worker logs
-goworker_stdout.txt
-goworker_stderr.txt
-
-# Test files
-mp3fortest/
+# OS
+.DS_Store
+Thumbs.db
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
-
-# OS
-Thumbs.db
-.DS_Store
-desktop.ini
-
-# Streamlit
-.streamlit/
-
-# Preference weights (user-specific)
-preference_weights.json

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AutoMix DJ Bot</title>
+  <!-- 변경됨: Pretendard, DM Sans, Syne 폰트 셋업 -->
+  <link rel="stylesheet"
+    href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.8/dist/web/variable/pretendardvariable.css" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500&family=Syne:wght@400;700&display=swap"
+    rel="stylesheet" />
+  <!-- 제거됨: Inter 폰트 링크 제거 -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <!-- Header -->
+  <header class="app-header">
+    <div class="logo">
+      <!-- 변경됨: 헤드폰 이모지 대신 로고 SVG (교차하는 두 개의 호) -->
+      <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" class="logo-mark">
+        <!-- 왼쪽 호 -->
+        <circle cx="11.52" cy="16" r="10.88" fill="none" stroke="currentColor" stroke-width="2.08"
+          stroke-linecap="round" opacity="1" />
+        <!-- 오른쪽 호 -->
+        <circle cx="20.48" cy="16" r="10.88" fill="none" stroke="currentColor" stroke-width="2.08"
+          stroke-linecap="round" opacity="0.55" />
+        <!-- 교차 강조 dot -->
+        <circle cx="16" cy="16" r="1.872" fill="currentColor" />
+      </svg>
+      <div>
+        <h1>AutoMix DJ Bot</h1>
+        <!-- 제거됨: 부제목 (AI-Powered...) 제거 -->
+      </div>
+    </div>
+    <div class="status-badge" id="statusBadge">
+      <!-- 변경됨: 초록색/노란색 대신 색상 시스템 연동을 위해 클래스명 유지하되 CSS로 제어 -->
+      <span class="dot"></span>
+      <span id="statusText">Connecting...</span>
+    </div>
+  </header>
+
+  <!-- Main Layout -->
+  <main class="app-body">
+    <!-- LEFT: Sources + Tracks -->
+    <aside class="panel panel-left">
+      <!-- YouTube input -->
+      <section class="yt-section">
+        <!-- 제거됨: YouTube 플리 가져오기 섹션 라벨 제거 -->
+        <!-- 변경됨: placeholder에 안내 포함 -->
+        <div class="yt-row">
+          <input type="text" id="ytUrl" class="input-text" placeholder="YouTube URL 기입" />
+          <input type="number" id="ytMax" class="input-number" value="20" min="1" max="50" title="최대 곡 수" />
+        </div>
+        <!-- 변경됨: 다운로드 버튼 디자인 개선(btn-accent -> btn-primary) -->
+        <button class="btn btn-primary full-width" id="ytDownloadBtn">다운로드</button>
+        <div id="ytStatus" class="yt-status hidden"></div>
+      </section>
+
+      <!-- 변경됨: or 구분선을 얇고 미니멀하게 -->
+      <div class="divider"><span>or</span></div>
+
+      <!-- Local file upload -->
+      <!-- 변경됨: 드래그 앤 드롭 영역 텍스트 미니멀화 -->
+      <section class="upload-zone" id="uploadZone">
+        <div class="upload-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18V5l12-2v13"></path>
+            <circle cx="6" cy="18" r="3"></circle>
+            <circle cx="18" cy="16" r="3"></circle>
+          </svg>
+        </div>
+        <p class="upload-title">MP3 / WAV</p>
+        <label class="btn btn-secondary" for="fileInput">파일 선택</label>
+        <input type="file" id="fileInput" accept=".mp3,.wav" multiple hidden />
+      </section>
+
+      <!-- Track list -->
+      <div id="trackList" class="track-list hidden">
+        <div class="section-header">
+          <h2>트랙 목록 <span id="trackCount" class="badge">0</span></h2>
+          <div class="header-actions">
+            <button class="btn btn-ghost btn-sm" id="selectAllBtn" title="전체 선택/해제">전체 선택</button>
+            <button class="btn btn-icon" id="clearBtn" title="전체 삭제">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div id="tracks"></div>
+
+        <div class="action-block">
+          <!-- 변경됨: 액션 버튼 클래스 -->
+          <button class="btn btn-primary btn-lg full-width" id="smartMixBtn" disabled>
+            스마트 믹스 생성
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- RIGHT: Mix Planner + Result -->
+    <section class="panel panel-right">
+
+      <!-- Progress State -->
+      <div id="progressPanel" class="hidden">
+        <div class="progress-header">
+          <span id="progressLabel">분석 중...</span>
+          <span id="progressPct">0%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <p id="progressSub" class="progress-sub"></p>
+      </div>
+
+      <!-- Transitions panel (hidden, not shown to user) -->
+      <div id="transitionsPanel" class="hidden">
+        <div id="transitionsList"></div>
+        <button id="generateBtn" class="hidden"></button>
+      </div>
+
+      <!-- Result -->
+      <div id="resultPanel" class="hidden">
+        <div class="result-layout">
+          <!-- Left sidebar for versions -->
+          <div class="versions-sidebar">
+            <div class="flex justify-between items-center mb-20">
+              <h3 style="margin:0;">믹스 버전</h3>
+            </div>
+            <div id="versionsList" class="versions-list">
+              <!-- Version tabs will be injected here -->
+            </div>
+          </div>
+
+          <!-- Main content for selected version -->
+          <div class="version-content flex-grow">
+            <!-- Header actions -->
+            <div class="version-header flex justify-between items-center mb-20">
+              <div class="flex items-center" style="gap: 12px;">
+                <h2 id="versionTitle">믹스 완성!</h2>
+                <button class="btn btn-ghost" id="regenerateBtn" style="padding: 4px 10px; font-size: 11px;">+ 새 버전
+                  생성</button>
+              </div>
+              <div class="flex items-center" style="gap: 16px;">
+                <p id="resultInfo" class="result-info" style="margin:0;"></p>
+                <div class="result-actions flex" style="flex-direction: row; gap: 8px; margin:0;">
+                  <button class="btn btn-primary" id="downloadZipBtn">📦 ZIP 저장</button>
+                  <div class="dropdown">
+                    <button class="btn btn-ghost">단건 다운 ▾</button>
+                    <div class="dropdown-content">
+                      <a id="downloadMp3Btn">🎵 MP3 다운로드</a>
+                      <a id="downloadLrcBtn">📝 LRC 다운로드</a>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- In-app audio player attached to top -->
+            <div class="result-player mb-20">
+              <audio id="mixAudio" controls class="full-width"></audio>
+            </div>
+
+            <!-- Timeline visualization -->
+            <div class="timeline-container">
+              <h3>트랙 타임라인</h3>
+              <div id="timelineList" class="timeline-list">
+                <!-- Track entries injected here -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Empty state -->
+      <!-- 제거됨: 빈 상태의 텍스트 설명 및 제목 -->
+      <!-- 변경됨: 구조만 남기고 아이콘으로 처리 -->
+      <div id="emptyState" class="empty-state">
+        <div class="empty-icon">
+          <!-- 레코드/턴테이블 형태의 간결한 아이콘 -->
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M20 12h-2"></path>
+          </svg>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Toast container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="app.js" type="module"></script>
+</body>
+
+</html>

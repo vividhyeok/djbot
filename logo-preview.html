@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>AutoMix — 로고 프리뷰</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700&family=Pretendard:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Pretendard', sans-serif;
+    background: #2a2c14;
+    color: #F8F3E1;
+    padding: 48px;
+    min-height: 100vh;
+  }
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    letter-spacing: 2px;
+    color: #AEB784;
+    text-transform: uppercase;
+    margin-bottom: 40px;
+  }
+  .section {
+    margin-bottom: 48px;
+  }
+  .section-label {
+    font-size: 11px;
+    color: #AEB784;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .preview-box {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    padding: 40px;
+  }
+  .on-dark  { background: #41431B; }
+  .on-light { background: #F8F3E1; }
+  .on-mid   { background: #E3DBBB; }
+
+  .icon-row {
+    display: flex;
+    gap: 24px;
+    align-items: flex-end;
+  }
+  .icon-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  .icon-wrap span {
+    font-size: 11px;
+    color: #AEB784;
+  }
+
+  /* 인라인 SVG 로고마크 */
+  .logomark svg, .wordmark-wrap svg {
+    display: block;
+  }
+</style>
+</head>
+<body>
+<h1>AutoMix DJ Bot — 로고 시스템</h1>
+
+<!-- 가로형 로고 (어두운 배경) -->
+<div class="section">
+  <div class="section-label">가로형 — 어두운 배경</div>
+  <div class="preview-box on-dark">
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="44" viewBox="0 0 200 44">
+      <defs>
+        <style>@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700&display=swap');</style>
+      </defs>
+      <!-- 로고마크 -->
+      <circle cx="9.9" cy="22" r="12.2" fill="none" stroke="#F8F3E1" stroke-width="2.3" />
+      <circle cx="15.1" cy="22" r="12.2" fill="none" stroke="#F8F3E1" stroke-width="2.3" opacity="0.5"/>
+      <circle cx="12.5" cy="22" r="2.1" fill="#F8F3E1"/>
+      <!-- 워드마크 -->
+      <text x="34" y="20" font-family="Syne, sans-serif" font-weight="700" font-size="15" fill="#F8F3E1" letter-spacing="-0.3">AutoMix</text>
+      <text x="34" y="34" font-family="Syne, sans-serif" font-weight="400" font-size="9" fill="#AEB784" letter-spacing="2">DJ BOT</text>
+    </svg>
+  </div>
+</div>
+
+<!-- 가로형 로고 (밝은 배경) -->
+<div class="section">
+  <div class="section-label">가로형 — 밝은 배경</div>
+  <div class="preview-box on-light">
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="44" viewBox="0 0 200 44">
+      <circle cx="9.9" cy="22" r="12.2" fill="none" stroke="#41431B" stroke-width="2.3"/>
+      <circle cx="15.1" cy="22" r="12.2" fill="none" stroke="#41431B" stroke-width="2.3" opacity="0.5"/>
+      <circle cx="12.5" cy="22" r="2.1" fill="#41431B"/>
+      <text x="34" y="20" font-family="Syne, sans-serif" font-weight="700" font-size="15" fill="#41431B" letter-spacing="-0.3">AutoMix</text>
+      <text x="34" y="34" font-family="Syne, sans-serif" font-weight="400" font-size="9" fill="#41431B" opacity="0.55" letter-spacing="2">DJ BOT</text>
+    </svg>
+  </div>
+</div>
+
+<!-- 아이콘 시스템 -->
+<div class="section">
+  <div class="section-label">아이콘 시스템</div>
+  <div class="preview-box on-dark">
+    <div class="icon-row">
+
+      <!-- 512px -->
+      <div class="icon-wrap">
+        <svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 512 512">
+          <defs>
+            <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+              <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#AEB784" stroke-width="0.4" opacity="0.15"/>
+            </pattern>
+          </defs>
+          <rect width="512" height="512" rx="110" fill="#41431B"/>
+          <rect width="512" height="512" rx="110" fill="url(#grid)"/>
+          <!-- 마크 (512 기준 중앙 280px) -->
+          <circle cx="208" cy="256" r="95" fill="none" stroke="#F8F3E1" stroke-width="18"/>
+          <circle cx="304" cy="256" r="95" fill="none" stroke="#F8F3E1" stroke-width="18" opacity="0.5"/>
+          <circle cx="256" cy="256" r="15" fill="#F8F3E1"/>
+        </svg>
+        <span>512px</span>
+      </div>
+
+      <!-- 128px -->
+      <div class="icon-wrap">
+        <svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 512 512">
+          <rect width="512" height="512" rx="110" fill="#41431B"/>
+          <circle cx="208" cy="256" r="95" fill="none" stroke="#F8F3E1" stroke-width="18"/>
+          <circle cx="304" cy="256" r="95" fill="none" stroke="#F8F3E1" stroke-width="18" opacity="0.5"/>
+          <circle cx="256" cy="256" r="15" fill="#F8F3E1"/>
+        </svg>
+        <span>128px</span>
+      </div>
+
+      <!-- 32px -->
+      <div class="icon-wrap">
+        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 32 32">
+          <rect width="32" height="32" rx="7" fill="#41431B"/>
+          <circle cx="9.9" cy="16" r="5.4" fill="none" stroke="#F8F3E1" stroke-width="1.3"/>
+          <circle cx="13.1" cy="16" r="5.4" fill="none" stroke="#F8F3E1" stroke-width="1.3" opacity="0.5"/>
+          <circle cx="11.5" cy="16" r="1.1" fill="#F8F3E1"/>
+        </svg>
+        <span>32px</span>
+      </div>
+
+      <!-- 16px -->
+      <div class="icon-wrap">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 16 16">
+          <rect width="16" height="16" rx="3.5" fill="#41431B"/>
+          <circle cx="5" cy="8" r="2.7" fill="none" stroke="#F8F3E1" stroke-width="0.9"/>
+          <circle cx="7" cy="8" r="2.7" fill="none" stroke="#F8F3E1" stroke-width="0.9" opacity="0.5"/>
+          <circle cx="6" cy="8" r="0.7" fill="#F8F3E1"/>
+        </svg>
+        <span>16px</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 컬러 팔레트 -->
+<div class="section">
+  <div class="section-label">컬러 팔레트</div>
+  <div style="display:flex; gap: 12px;">
+    <div style="display:flex;flex-direction:column;gap:8px;align-items:center">
+      <div style="width:64px;height:64px;border-radius:10px;background:#41431B;border:1px solid #52561F"></div>
+      <span style="font-size:10px;color:#AEB784">#41431B</span>
+      <span style="font-size:10px;color:#AEB784">Base</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;align-items:center">
+      <div style="width:64px;height:64px;border-radius:10px;background:#AEB784"></div>
+      <span style="font-size:10px;color:#AEB784">#AEB784</span>
+      <span style="font-size:10px;color:#AEB784">Mid</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;align-items:center">
+      <div style="width:64px;height:64px;border-radius:10px;background:#E3DBBB"></div>
+      <span style="font-size:10px;color:#AEB784">#E3DBBB</span>
+      <span style="font-size:10px;color:#AEB784">Light</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;align-items:center">
+      <div style="width:64px;height:64px;border-radius:10px;background:#F8F3E1"></div>
+      <span style="font-size:10px;color:#AEB784">#F8F3E1</span>
+      <span style="font-size:10px;color:#AEB784">Text</span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
