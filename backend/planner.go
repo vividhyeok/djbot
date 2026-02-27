@@ -6,8 +6,11 @@ import (
 	"sort"
 )
 
-// ComputePlayBounds sets PlayStart / PlayEnd on each TrackEntry based on
-// highlight analysis and transition timing, mirroring app.py compute_play_bounds.
+// ComputePlayBounds sets PlayStart / PlayEnd on each TrackEntry.
+// PlayStart: where in the track to start playing from (BInTime from transition).
+// PlayEnd: where in the track to stop playing (always full Duration - we let the
+//
+//	renderer handle overlaps using the xfade duration from the TransitionSpec).
 func ComputePlayBounds(playlist []TrackWithAnalysis, transitions []TransitionSpec) []TrackEntry {
 	n := len(playlist)
 	entries := make([]TrackEntry, n)
@@ -23,92 +26,59 @@ func ComputePlayBounds(playlist []TrackWithAnalysis, transitions []TransitionSpe
 		return entries
 	}
 
-	snapBeat := func(timeSec float64, beats []float64, barOffset int) float64 {
-		if len(beats) == 0 {
-			return timeSec
-		}
-		// Find closest beat index
-		best, bestDist := 0, math.Abs(beats[0]-timeSec)
-		for i, b := range beats {
-			if d := math.Abs(b - timeSec); d < bestDist {
-				bestDist = d
-				best = i
-			}
-		}
-		// Step by bars (4 beats each) and align to nearest bar
-		step := barOffset * 4
-		idx := best + step
-		idx = (int(math.Round(float64(idx) / 4.0))) * 4
-		if idx < 0 {
-			idx = 0
-		}
-		if idx >= len(beats) {
-			idx = len(beats) - 1
-		}
-		return beats[idx]
-	}
-
+	// First track: find a good starting point (intro or first highlight)
 	firstStart := func(ta TrackAnalysis) float64 {
-		beats := ta.BeatTimes
 		dur := ta.Duration
-		if len(beats) == 0 {
-			return math.Max(0, dur*0.10)
-		}
-		anchor := dur * 0.20
+		beats := ta.BeatTimes
+		anchor := 0.0
 		if len(ta.Highlights) > 0 {
 			anchor = ta.Highlights[0].StartTime
 		} else if len(ta.Segments) > 0 {
-			best := ta.Segments[0]
 			for _, s := range ta.Segments {
-				if s.Energy > best.Energy {
-					best = s
+				if s.Label == "Intro" || s.Label == "Verse" {
+					anchor = s.Time
+					break
 				}
 			}
-			anchor = best.Time
 		}
-		start := snapBeat(anchor, beats, -8)
-		if start > dur*0.80 {
-			start = dur * 0.80
+		// Snap to nearest beat
+		if len(beats) > 0 && anchor > 0 {
+			best, bestD := 0, math.Abs(beats[0]-anchor)
+			for i, b := range beats {
+				if d := math.Abs(b - anchor); d < bestD {
+					bestD = d
+					best = i
+				}
+			}
+			anchor = beats[best]
 		}
-		if start < 0 {
-			start = 0
+		if anchor > dur*0.5 {
+			anchor = 0 // fallback: play from beginning if analysis misidentified
 		}
-		return start
+		return anchor
 	}
 
-	lastEnd := func(ta TrackAnalysis, playStart float64) float64 {
-		dur := ta.Duration
-		beats := ta.BeatTimes
-		anchor := playStart + 90
-		if len(ta.Highlights) > 0 {
-			anchor = ta.Highlights[0].EndTime
-		}
-		end := snapBeat(anchor, beats, 4)
-		if end > dur {
-			end = dur
-		}
-		return end
-	}
-
-	// First track
+	// First track starts at intro, plays to end
 	entries[0].PlayStart = firstStart(playlist[0].Analysis)
-	if len(transitions) > 0 {
-		entries[0].PlayEnd = transitions[0].AOutTime
-	} else {
-		entries[0].PlayEnd = playlist[0].Analysis.Duration
-	}
+	entries[0].PlayEnd = playlist[0].Analysis.Duration
 
-	// Middle tracks
-	for i := 1; i < n-1; i++ {
-		entries[i].PlayStart = transitions[i-1].BInTime
-		entries[i].PlayEnd = transitions[i].AOutTime
-	}
-
-	// Last track
-	if n > 1 {
-		bIn := transitions[len(transitions)-1].BInTime
-		entries[n-1].PlayStart = bIn
-		entries[n-1].PlayEnd = lastEnd(playlist[n-1].Analysis, bIn)
+	// Middle and last tracks: start at BInTime (where DJ "drops in"), play to end
+	for i := 1; i < n; i++ {
+		if i-1 < len(transitions) {
+			bIn := transitions[i-1].BInTime
+			dur := playlist[i].Analysis.Duration
+			// Clamp: BInTime must be within 0..Duration-15
+			if bIn < 0 {
+				bIn = 0
+			}
+			if bIn > dur-15.0 {
+				bIn = math.Max(0, dur-15.0)
+			}
+			entries[i].PlayStart = bIn
+		} else {
+			entries[i].PlayStart = 0
+		}
+		entries[i].PlayEnd = playlist[i].Analysis.Duration
 	}
 
 	return entries

@@ -171,21 +171,29 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 	}
 
 	currentOffsetMs := 0
+	prevChunkMs := 0
 
 	for i := 0; i < len(playlist); i++ {
 		t := playlist[i]
 
 		startSec := t.PlayStart
 		endSec := t.PlayEnd
+
+		// PlayEnd must always be >= Duration because we set it to Duration in ComputePlayBounds.
+		// But just in case, guarantee it's the full track if zero/negative.
 		if endSec <= 0 {
 			endSec = t.Duration
 		}
-		// Minimum 15 second play window guarantee
-		if endSec <= startSec+15.0 {
-			endSec = startSec + 15.0
+
+		// CRITICAL: startSec must NEVER be >= endSec. Clamp hard.
+		if startSec < 0 {
+			startSec = 0
+		}
+		if startSec >= endSec-15.0 {
+			startSec = math.Max(0, endSec-15.0)
 		}
 
-		// This is the total physical duration of the raw audio chunk we cut from this track
+		// Total physical audio chunk length we decode from this track
 		chunkPhysicalDurSec := endSec - startSec
 
 		var xfadeDurMs int = 0
@@ -194,39 +202,43 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 		if i > 0 {
 			trans := transitions[i-1]
 			transType = trans.Type
+			// Crossfade duration in milliseconds from the plan
 			xfadeDurMs = int(math.Round(trans.Duration * 1000.0))
 
-			// Sanity clamping strictly based on physical chunks
-			if xfadeDurMs < 2000 {
-				xfadeDurMs = 2000
+			// Floor crossfade at 4 seconds minimum for audible effect
+			if xfadeDurMs < 4000 {
+				xfadeDurMs = 4000
 			}
-			maxCurrent := currentOffsetMs - 500
-			maxB := int(chunkPhysicalDurSec*1000.0) - 500
-			if xfadeDurMs > maxCurrent {
-				xfadeDurMs = maxCurrent
+
+			// Clamp: can't overlap MORE than what has been rendered so far (prev chunk)
+			// AND can't overlap more than B's total duration - 5s
+			maxByPrev := prevChunkMs - 1000
+			maxByB := int(chunkPhysicalDurSec*1000.0) - 5000
+			if xfadeDurMs > maxByPrev && maxByPrev > 0 {
+				xfadeDurMs = maxByPrev
 			}
-			if xfadeDurMs > maxB {
-				xfadeDurMs = maxB
+			if xfadeDurMs > maxByB && maxByB > 0 {
+				xfadeDurMs = maxByB
 			}
 			if xfadeDurMs < 0 {
 				xfadeDurMs = 0
 			}
 
-			// In Pydub, crossfade simply subtracts the crossfade duration from the timeline!
-			// currentOffsetMs is pointing at the physical END of the previous chunk.
+			// Pydub core mechanism: overlap = subtract crossfade from timeline position
 			currentOffsetMs -= xfadeDurMs
 			if currentOffsetMs < 0 {
 				currentOffsetMs = 0
 			}
 
-			// Record the paired volume FADES
-			fadeEffectSec := float64(xfadeDurMs) / 1000.0
-			nodes[i].EntryFade = fadeEffectSec
+			fadeSec := float64(xfadeDurMs) / 1000.0
+			nodes[i].EntryFade = fadeSec
 			nodes[i].TransType = transType
-
-			nodes[i-1].ExitFade = fadeEffectSec
+			nodes[i-1].ExitFade = fadeSec
 			nodes[i-1].ExitType = transType
 		}
+
+		log.Printf("[timeline] track[%d] %s: start=%.1fs end=%.1fs chunk=%.1fs offset=%dms xfade=%dms",
+			i, t.Filename, startSec, endSec, chunkPhysicalDurSec, currentOffsetMs, xfadeDurMs)
 
 		trackStarts = append(trackStarts, struct {
 			OffsetMs int
@@ -238,7 +250,8 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 		nodes[i].EndSec = endSec
 		nodes[i].DelayMs = currentOffsetMs
 
-		currentOffsetMs += int(math.Round(chunkPhysicalDurSec * 1000.0))
+		prevChunkMs = int(math.Round(chunkPhysicalDurSec * 1000.0))
+		currentOffsetMs += prevChunkMs
 	}
 
 	// -----------------------------------------------------

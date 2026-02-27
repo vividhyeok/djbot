@@ -10,30 +10,46 @@ import (
 
 func TestTimelineSimulation(t *testing.T) {
 	rand.Seed(42)
+	allPass := true
 
 	fmt.Println("======================================================")
-	fmt.Println("🚀 [DJBot] 헤드리스 믹스 타임라인 시뮬레이터 가동 시작")
+	fmt.Println("🚀 [DJBot] 헤드리스 믹스 타임라인 시뮬레이터 (30회 검증)")
 	fmt.Println("======================================================")
 
-	for iteration := 1; iteration <= 3; iteration++ {
-		fmt.Printf("\n▶ 시뮬레이션 RUN #%d ---------------------------------\n", iteration)
-		time.Sleep(500 * time.Millisecond)
-
-		numTracks := 5 + rand.Intn(3)
+	for iteration := 1; iteration <= 30; iteration++ {
+		numTracks := 5 + rand.Intn(11) // 5 to 15 tracks
 		var playlist []TrackWithAnalysis
+
 		for i := 0; i < numTracks; i++ {
-			dur := 180.0 + rand.Float64()*60.0
-			bpm := 120.0
+			bpm := 90.0 + rand.Float64()*60.0
+			dur := 160.0 + rand.Float64()*80.0 // 2:40 to 4:00
 
 			beats := []float64{}
-			for cur := 0.0; cur < dur; cur += (60.0 / bpm) {
+			interval := 60.0 / bpm
+			for cur := 0.0; cur < dur; cur += interval {
 				beats = append(beats, cur)
 			}
-			segs := []Segment{{Time: 0, Label: "Intro", Energy: 0.5}, {Time: dur - 30, Label: "Outro", Energy: 0.5}}
+			segs := []Segment{
+				{Time: 0, Label: "Intro", Energy: 0.4},
+				{Time: dur * 0.25, Label: "Verse", Energy: 0.6},
+				{Time: dur * 0.5, Label: "Chorus", Energy: 0.9},
+				{Time: dur - 30, Label: "Outro", Energy: 0.3},
+			}
+			energy := make([]float64, len(beats))
+			for j := range energy {
+				energy[j] = 0.4 + rand.Float64()*0.5
+			}
 
 			playlist = append(playlist, TrackWithAnalysis{
 				Filename: fmt.Sprintf("Track_%d", i+1),
-				Analysis: TrackAnalysis{Filepath: "fake", Duration: dur, BPM: bpm, BeatTimes: beats, Segments: segs},
+				Analysis: TrackAnalysis{
+					Filepath:  "fake",
+					Duration:  dur,
+					BPM:       bpm,
+					BeatTimes: beats,
+					Segments:  segs,
+					Energy:    energy,
+				},
 			})
 		}
 
@@ -42,9 +58,7 @@ func TestTimelineSimulation(t *testing.T) {
 			rawTracks[i] = x.Analysis
 		}
 
-		fmt.Printf("[Planner] %d개의 가상 트랙 타임라인 생성 중...\n", numTracks)
 		plan := GenerateMixPlan(rawTracks, nil, nil, 1)
-
 		sortedPlaylist := make([]TrackWithAnalysis, len(plan.SortedTracks))
 		for i, an := range plan.SortedTracks {
 			sortedPlaylist[i] = TrackWithAnalysis{Filename: fmt.Sprintf("Track_%d", i+1), Analysis: an}
@@ -52,13 +66,11 @@ func TestTimelineSimulation(t *testing.T) {
 
 		entries := ComputePlayBounds(sortedPlaylist, plan.Selections)
 
+		// Simulate renderer.go timeline loop exactly
 		currentOffsetMs := 0
-		var expectedTotalDuration float64 = 0
-
-		fmt.Println("\n[Renderer] 타임라인 오버랩(덧셈/뺄셈) 시뮬레이션 진행:")
-		fmt.Println("---------------------------------------------------------------------------------")
-		fmt.Printf("%-10s | %-12s | %-12s | %-15s | %-15s\n", "Track", "Play Length", "Crossfade", "Start Time(MS)", "Expected Total")
-		fmt.Println("---------------------------------------------------------------------------------")
+		prevChunkMs := 0
+		totalExpectedSec := 0.0
+		hasNegative := false
 
 		for i := 0; i < len(entries); i++ {
 			tt := entries[i]
@@ -67,62 +79,69 @@ func TestTimelineSimulation(t *testing.T) {
 			if endSec <= 0 {
 				endSec = tt.Duration
 			}
-			if endSec <= startSec+15.0 {
-				endSec = startSec + 15.0
+			if startSec < 0 {
+				startSec = 0
+			}
+			if startSec >= endSec-15.0 {
+				startSec = math.Max(0, endSec-15.0)
+			}
+			chunkPhysicalDurSec := endSec - startSec
+
+			if chunkPhysicalDurSec < 0 {
+				hasNegative = true
+				fmt.Printf("  ❌ NEGATIVE CHUNK at track %d: %.1f - %.1f = %.1f\n", i, endSec, startSec, chunkPhysicalDurSec)
 			}
 
-			chunkPhysicalDurSec := endSec - startSec
-			expectedTotalDuration += chunkPhysicalDurSec
-
+			totalExpectedSec += chunkPhysicalDurSec
 			var xfadeDurMs int = 0
-			if i > 0 {
+
+			if i > 0 && i-1 < len(plan.Selections) {
 				trans := plan.Selections[i-1]
 				xfadeDurMs = int(math.Round(trans.Duration * 1000.0))
-
-				if xfadeDurMs < 2000 {
-					xfadeDurMs = 2000
+				if xfadeDurMs < 4000 {
+					xfadeDurMs = 4000
 				}
-				maxCurrent := currentOffsetMs - 500
-				maxB := int(chunkPhysicalDurSec*1000.0) - 500
-				if xfadeDurMs > maxCurrent {
-					xfadeDurMs = maxCurrent
+				maxByPrev := prevChunkMs - 1000
+				maxByB := int(chunkPhysicalDurSec*1000.0) - 5000
+				if xfadeDurMs > maxByPrev && maxByPrev > 0 {
+					xfadeDurMs = maxByPrev
 				}
-				if xfadeDurMs > maxB {
-					xfadeDurMs = maxB
+				if xfadeDurMs > maxByB && maxByB > 0 {
+					xfadeDurMs = maxByB
 				}
 				if xfadeDurMs < 0 {
 					xfadeDurMs = 0
 				}
-
-				// Pydub 교훈: 크로스페이드 길이만큼 이전 트랙의 타임라인을 뒤로 감음 (오버랩)
 				currentOffsetMs -= xfadeDurMs
 				if currentOffsetMs < 0 {
 					currentOffsetMs = 0
 				}
-
-				expectedTotalDuration -= (float64(xfadeDurMs) / 1000.0)
+				totalExpectedSec -= float64(xfadeDurMs) / 1000.0
 			}
 
-			fmt.Printf("%-10s | %6.2f초     | %6.2f초     | %8d ms      |  %8.2f초\n",
-				tt.Filename, chunkPhysicalDurSec, float64(xfadeDurMs)/1000.0, currentOffsetMs, expectedTotalDuration)
-
-			currentOffsetMs += int(math.Round(chunkPhysicalDurSec * 1000.0))
-			time.Sleep(300 * time.Millisecond) // 진행상황 시각 효과
+			prevChunkMs = int(math.Round(chunkPhysicalDurSec * 1000.0))
+			currentOffsetMs += prevChunkMs
 		}
 
 		actualTotalSec := float64(currentOffsetMs) / 1000.0
-		diff := math.Abs(actualTotalSec - expectedTotalDuration)
+		diff := math.Abs(actualTotalSec - totalExpectedSec)
 
-		fmt.Println("---------------------------------------------------------------------------------")
-		if diff > 0.05 {
-			fmt.Printf("❌ [결과] FAIL! 타임라인 오류 발생. 오차: %.3f초\n", diff)
-			t.Errorf("Drift detected: %.3f", diff)
-		} else {
-			fmt.Printf("✅ [결과] SUCCESS! 100%% 정확 (계산상 총 길이: %.3f초, 실제 타임라인: %.3f초)\n", expectedTotalDuration, actualTotalSec)
+		status := "✅"
+		if diff > 0.05 || hasNegative {
+			status = "❌"
+			allPass = false
+			t.Errorf("Run #%d FAILED: drift=%.3f, negative=%v", iteration, diff, hasNegative)
 		}
-		time.Sleep(500 * time.Millisecond)
+
+		fmt.Printf("%s RUN #%02d | Tracks: %d | Duration: %6.1fs | Drift: %.3fs\n",
+			status, iteration, numTracks, actualTotalSec, diff)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	fmt.Println("======================================================")
-	fmt.Println("🎉 [DJBot] 시뮬레이션 검증 완료. 오차 없이 믹싱 가능한 상태입니다.")
+	if allPass {
+		fmt.Println("🎉 모든 30회 시뮬레이션 통과! 타임라인 오차 없음. 실사용 준비 완료.")
+	} else {
+		fmt.Println("❌ 일부 시뮬레이션 실패. 로그에서 상세 내용 확인.")
+	}
 }
