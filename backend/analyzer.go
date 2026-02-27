@@ -92,9 +92,11 @@ func decodeToPCM(path string) ([]float32, int, error) {
 	}
 
 	samples := make([]float32, numSamples)
-	if err := binary.Read(bytes.NewReader(data), binary.LittleEndian, samples); err != nil {
-		return nil, 0, fmt.Errorf("parse pcm: %w", err)
+	for i := 0; i < numSamples; i++ {
+		bits := binary.LittleEndian.Uint32(data[i*4 : i*4+4])
+		samples[i] = math.Float32frombits(bits)
 	}
+
 	return samples, sr, nil
 }
 
@@ -141,8 +143,13 @@ func AnalyzeTrack(path, cacheDir string) (*TrackAnalysis, error) {
 
 	duration := float64(len(samples)) / float64(sr)
 	loudness := computeLoudnessDB(samples)
-	bpm := estimateBPM(samples, sr)
-	beatTimes := estimateBeatTimes(duration, bpm)
+
+	hopSize := 512
+	frameSize := 1024
+	onset := computeOnsetEnvelope(samples, sr, frameSize, hopSize)
+
+	bpm := estimateBPM(onset, sr, hopSize)
+	beatTimes := estimateBeatTimes(onset, sr, duration, bpm, hopSize)
 	energy := computeBeatEnergy(samples, sr, beatTimes)
 	key := detectKey(samples, sr)
 

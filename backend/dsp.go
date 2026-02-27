@@ -18,24 +18,41 @@ func nextPow2(n int) int {
 
 func fft(x []complex128) []complex128 {
 	n := len(x)
+	out := make([]complex128, n)
+	copy(out, x)
 	if n <= 1 {
-		out := make([]complex128, n)
-		copy(out, x)
 		return out
 	}
-	even := make([]complex128, n/2)
-	odd := make([]complex128, n/2)
-	for i := 0; i < n/2; i++ {
-		even[i] = x[2*i]
-		odd[i] = x[2*i+1]
+
+	// Bit reversal permutation
+	j := 0
+	for i := 0; i < n-1; i++ {
+		if i < j {
+			out[i], out[j] = out[j], out[i]
+		}
+		m := n >> 1
+		for j >= m && m > 0 {
+			j -= m
+			m >>= 1
+		}
+		j += m
 	}
-	eR := fft(even)
-	oR := fft(odd)
-	out := make([]complex128, n)
-	for k := 0; k < n/2; k++ {
-		t := cmplx.Rect(1, -2*math.Pi*float64(k)/float64(n)) * oR[k]
-		out[k] = eR[k] + t
-		out[k+n/2] = eR[k] - t
+
+	// Iterative Cooley-Tukey
+	for size := 2; size <= n; size <<= 1 {
+		half := size >> 1
+		step := -2 * math.Pi / float64(size)
+		wLen := complex(math.Cos(step), math.Sin(step))
+		for i := 0; i < n; i += size {
+			w := complex(1, 0)
+			for k := 0; k < half; k++ {
+				u := out[i+k]
+				v := out[i+k+half] * w
+				out[i+k] = u + v
+				out[i+k+half] = u - v
+				w *= wLen
+			}
+		}
 	}
 	return out
 }
@@ -60,6 +77,7 @@ func computeOnsetEnvelope(samples []float32, sr, frameSize, hopSize int) []float
 	window := hannWindow(frameSize)
 	onset := make([]float64, numFrames)
 	prevMag := make([]float64, fftSize/2+1)
+	mag := make([]float64, fftSize/2+1) // Bug Fix 2: Allocate once outside loop to kill massive GC pressure
 	// Reuse frame buffer across iterations to reduce GC pressure
 	frame := make([]complex128, fftSize)
 
@@ -73,7 +91,6 @@ func computeOnsetEnvelope(samples []float32, sr, frameSize, hopSize int) []float
 			frame[j] = complex(float64(samples[start+j])*window[j], 0)
 		}
 		spec := fft(frame)
-		mag := make([]float64, fftSize/2+1)
 		for j := 0; j <= fftSize/2; j++ {
 			mag[j] = cmplx.Abs(spec[j])
 		}
@@ -87,15 +104,13 @@ func computeOnsetEnvelope(samples []float32, sr, frameSize, hopSize int) []float
 			}
 		}
 		onset[i] = flux
-		prevMag = mag
+		// Copy contents instead of reassigning reference to reuse mag slice
+		copy(prevMag, mag)
 	}
 	return onset
 }
 
-func estimateBPM(samples []float32, sr int) float64 {
-	hopSize := 512
-	frameSize := 1024
-	onset := computeOnsetEnvelope(samples, sr, frameSize, hopSize)
+func estimateBPM(onset []float64, sr int, hopSize int) float64 {
 	if len(onset) < 100 {
 		return 120.0
 	}
@@ -119,8 +134,14 @@ func estimateBPM(samples []float32, sr int) float64 {
 		if count > 0 {
 			corr /= float64(count)
 		}
-		if corr > bestCorr {
-			bestCorr = corr
+
+		// Apply Perceptual Weighting (Bias towards 120-130 BPM) to prevent octave errors (70 vs 140)
+		bpmApprox := 60.0 / (float64(lag) * float64(hopSize) / float64(sr))
+		weight := math.Exp(-0.5 * math.Pow((bpmApprox-120.0)/40.0, 2))
+		weightedCorr := corr * (0.8 + 0.2*weight)
+
+		if weightedCorr > bestCorr {
+			bestCorr = weightedCorr
 			bestLag = lag
 		}
 	}
@@ -141,15 +162,42 @@ func estimateBPM(samples []float32, sr int) float64 {
 	return math.Round(bpm*10) / 10
 }
 
-func estimateBeatTimes(duration, bpm float64) []float64 {
+func estimateBeatTimes(onset []float64, sr int, duration, bpm float64, hopSize int) []float64 {
 	if bpm <= 0 {
 		bpm = 120
 	}
 	beatPeriod := 60.0 / bpm
+
+	// Find the strongest onset peak in the first 5 seconds to use as the phase anchor
+
+	anchorTime := 0.0
+	if len(onset) > 0 {
+		searchFrames := int(5.0 * float64(sr) / float64(hopSize))
+		if searchFrames > len(onset) {
+			searchFrames = len(onset)
+		}
+		bestOnsetIdx := 0
+		bestOnsetVal := 0.0
+		for i := 0; i < searchFrames; i++ {
+			if onset[i] > bestOnsetVal {
+				bestOnsetVal = onset[i]
+				bestOnsetIdx = i
+			}
+		}
+		anchorTime = float64(bestOnsetIdx) * float64(hopSize) / float64(sr)
+	}
+
 	var beats []float64
-	for t := 0.0; t < duration; t += beatPeriod {
+	// Generate beats backwards from anchor
+	for t := anchorTime; t >= 0; t -= beatPeriod {
 		beats = append(beats, math.Round(t*1000)/1000)
 	}
+	// Generate beats forwards from anchor
+	for t := anchorTime + beatPeriod; t < duration; t += beatPeriod {
+		beats = append(beats, math.Round(t*1000)/1000)
+	}
+
+	sortFloat64s(beats)
 	return beats
 }
 
@@ -260,9 +308,14 @@ func detectKey(samples []float32, sr int) string {
 	window := hannWindow(frameSize)
 	chroma := make([]float64, 12)
 
+	// Preallocate buffer to eliminate GC pressure
+	frame := make([]complex128, fftSize)
+
 	for i := 0; i < numFrames; i++ {
 		start := i * hopSize
-		frame := make([]complex128, fftSize)
+		for k := range frame {
+			frame[k] = 0
+		}
 		for j := 0; j < frameSize && start+j < n; j++ {
 			frame[j] = complex(float64(samples[start+j])*window[j], 0)
 		}

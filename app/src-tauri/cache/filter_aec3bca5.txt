@@ -1,0 +1,17 @@
+[0:a]atrim=start=0.000:end=164.211,atempo=1.5625,lowpass=f=400,afade=t=out:st=94.747:d=10.348,adelay=0|0[n0];
+[1:a]atrim=start=59.443:end=65.387,atempo=0.7353,afade=t=in:d=21.989,highpass=f=300,afade=t=out:st=0.000:d=16.168,adelay=94747|94747[n1];
+[2:a]atrim=start=142.663:end=47.554,rubberband=pitch=2.00,afade=t=in:d=11.889,highpass=f=300,afade=t=out:st=0.000:d=5.944,adelay=86663|86663[n2];
+[3:a]atrim=start=142.663:end=148.607,rubberband=pitch=1.00,afade=t=in:d=5.944,volume=-1dB,adelay=0|0[n3];
+[4:a]atrim=start=130.081:end=156.098,atempo=1.5942,highpass=f=300,volume=1dB,volume=-1dB,adelay=0|0[n4];
+[5:a]atrim=start=124.878:end=163.902,atempo=0.8000,highpass=f=300,volume=1dB,afade=t=out:st=27.197:d=0.01,adelay=4080|4080[n5];
+[6:a]atrim=start=77.264:end=86.922,atempo=1.1187,highpass=f=300,afade=t=out:st=0.000:d=14.126,adelay=31277|31277[n6];
+[7:a]atrim=start=106.964:end=167.131,atempo=0.8461,afade=t=in:d=18.677,lowpass=f=400,afade=t=out:st=51.353:d=19.758,adelay=25784|25784[n7];
+[8:a]atrim=start=89.199:end=100.348,atempo=1.3339,rubberband=pitch=1.00,afade=t=in:d=12.533,highpass=f=300,afade=t=out:st=0.000:d=19.690,adelay=77137|77137[n8];
+[9:a]atrim=start=0.000:end=239.601,atempo=1.2163,afade=t=in:d=21.594,highpass=f=300,afade=t=out:st=184.502:d=12.489,adelay=65805|65805[n9];
+[10:a]atrim=start=28.959:end=173.756,atempo=0.9532,afade=t=in:d=15.935,highpass=f=300,afade=t=out:st=137.523:d=14.377,adelay=250307|250307[n10];
+[11:a]atrim=start=78.049:end=182.114,atempo=0.9492,rubberband=pitch=1.00,afade=t=in:d=14.438,volume=-1dB,adelay=387829|387829[n11];
+[12:a]atrim=start=124.878:end=156.098,atempo=0.8000,highpass=f=300,volume=1dB,highpass=f=300,afade=t=out:st=19.992:d=19.033,adelay=481662|481662[n12];
+[13:a]atrim=start=59.443:end=66.873,atempo=0.9760,rubberband=pitch=1.00,afade=t=in:d=15.600,highpass=f=300,afade=t=out:st=0.000:d=15.948,adelay=501654|501654[n13];
+[14:a]atrim=start=163.404:end=81.702,atempo=1.0498,afade=t=in:d=14.827,highpass=f=300,afade=t=out:st=0.000:d=17.435,adelay=493319|493319[n14];
+[15:a]atrim=start=20.802:end=229.180,atempo=1.1365,afade=t=in:d=16.105,adelay=398057|398057[n15];
+[n0][n1][n2][n3][n4][n5][n6][n7][n8][n9][n10][n11][n12][n13][n14][n15]amix=inputs=16:duration=longest:normalize=0,volume=-2dB[out]

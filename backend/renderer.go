@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,8 +57,9 @@ func RenderPreview(trackAPath, trackBPath string, spec TransitionSpec, cacheDir 
 	var filterComplex string
 
 	// Speed filter (atempo only supports 0.5-100.0, chain for larger changes)
-	atempoA := buildAtempoFilter(speedA)
-	atempoB := buildAtempoFilter(speedB)
+	// Speed filter (atempo only supports 0.5-100.0, chain for larger changes)
+	atempoA := buildAtempoFilter(speedA, 0.0)
+	atempoB := buildAtempoFilter(speedB, spec.PitchStepB)
 
 	switch spec.Type {
 	case "bass_swap":
@@ -121,244 +124,301 @@ func RenderPreview(trackAPath, trackBPath string, spec TransitionSpec, cacheDir 
 	return outputPath, nil
 }
 
-// RenderFinalMix renders the full mixset to MP3 + LRC
+// RenderFinalMix renders the full mixset to MP3 + LRC using a single native FFmpeg filter_complex
 func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputPath, cacheDir string) (string, string, error) {
 	if len(playlist) < 2 {
 		return "", "", fmt.Errorf("need at least 2 tracks")
 	}
 
-	log.Printf("[render mix] %d tracks, %d transitions", len(playlist), len(transitions))
+	log.Printf("[render mix] %d tracks, %d transitions (Go Native Mega filter_complex)", len(playlist), len(transitions))
 
-	var segmentFiles []string
+	// Ensure tracks are pre-converted/normalized so timing is guaranteed length
+	var wavMap []string
+	for i, t := range playlist {
+		wavPath := filepath.Join(cacheDir, fmt.Sprintf("norm_%s.wav", randHex(6)))
+		cmd := exec.Command(ffmpegPath, "-y", "-i", t.Filepath,
+			"-map_metadata", "-1",
+			"-ar", "44100", "-ac", "2", "-sample_fmt", "s16",
+			"-af", "loudnorm=I=-14:TP=-2.0:LRA=11",
+			wavPath,
+		)
+		if err := cmd.Run(); err != nil {
+			log.Printf("Warning: failed to convert to wav: %v", err)
+		} else {
+			playlist[i].Filepath = wavPath
+			wavMap = append(wavMap, wavPath)
+		}
+	}
+
+	// Calculate absolute times on the master timeline
+	// Each slice needs [StartTimeSec, EndTimeSec] from its source,
+	// and AbsoluteMs to be delayed by.
+	type timelineNode struct {
+		Path      string
+		StartSec  float64
+		EndSec    float64
+		DelayMs   int     // Absolute position in the final mix
+		TransType string  // entry transition type for THIS node
+		EntryFade float64 // entry fade duration in seconds
+		ExitType  string  // exit transition type for THIS node
+		ExitFade  float64 // exit fade duration in seconds
+	}
+
+	nodes := make([]timelineNode, len(playlist))
 	var trackStarts []struct {
 		OffsetMs int
 		Name     string
 	}
 
-	totalMs := 0
+	currentOffsetMs := 0
 
-	// 1. First track body: from PlayStart to transition mix point
-	if len(transitions) > 0 {
-		t0 := transitions[0]
-		playStart0 := playlist[0].PlayStart
-		bodyEnd := t0.AOutTime - t0.Duration
-		bodyDur := bodyEnd - playStart0
-		if bodyDur > 0 {
-			seg := filepath.Join(cacheDir, fmt.Sprintf("seg_%d_%s.wav", 0, randHex(4)))
-			err := extractSegment(playlist[0].Filepath, playStart0, bodyDur, 1.0, "", seg)
-			if err != nil {
-				return "", "", fmt.Errorf("body0: %w", err)
+	for i := 0; i < len(playlist); i++ {
+		t := playlist[i]
+
+		startSec := t.PlayStart
+		endSec := t.PlayEnd
+		if endSec <= 0 {
+			endSec = t.Duration
+		}
+		// Minimum 15 second play window guarantee
+		if endSec <= startSec+15.0 {
+			endSec = startSec + 15.0
+		}
+
+		// This is the total physical duration of the raw audio chunk we cut from this track
+		chunkPhysicalDurSec := endSec - startSec
+
+		var xfadeDurMs int = 0
+		var transType string = "crossfade"
+
+		if i > 0 {
+			trans := transitions[i-1]
+			transType = trans.Type
+			xfadeDurMs = int(math.Round(trans.Duration * 1000.0))
+
+			// Sanity clamping strictly based on physical chunks
+			if xfadeDurMs < 2000 {
+				xfadeDurMs = 2000
 			}
-			segmentFiles = append(segmentFiles, seg)
-			trackStarts = append(trackStarts, struct {
-				OffsetMs int
-				Name     string
-			}{0, playlist[0].Filename})
-			totalMs += int(bodyDur * 1000)
-		}
-	}
+			maxCurrent := currentOffsetMs - 500
+			maxB := int(chunkPhysicalDurSec*1000.0) - 500
+			if xfadeDurMs > maxCurrent {
+				xfadeDurMs = maxCurrent
+			}
+			if xfadeDurMs > maxB {
+				xfadeDurMs = maxB
+			}
+			if xfadeDurMs < 0 {
+				xfadeDurMs = 0
+			}
 
-	// 2. For each transition: render mixed zone + next track body
-	for i, trans := range transitions {
-		trackA := playlist[i]
-		trackB := playlist[i+1]
+			// In Pydub, crossfade simply subtracts the crossfade duration from the timeline!
+			// currentOffsetMs is pointing at the physical END of the previous chunk.
+			currentOffsetMs -= xfadeDurMs
+			if currentOffsetMs < 0 {
+				currentOffsetMs = 0
+			}
 
-		// Render transition zone
-		transSeg := filepath.Join(cacheDir, fmt.Sprintf("trans_%d_%s.wav", i, randHex(4)))
-		err := renderTransitionSegment(trackA.Filepath, trackB.Filepath, trans, transSeg)
-		if err != nil {
-			return "", "", fmt.Errorf("trans%d: %w", i, err)
+			// Record the paired volume FADES
+			fadeEffectSec := float64(xfadeDurMs) / 1000.0
+			nodes[i].EntryFade = fadeEffectSec
+			nodes[i].TransType = transType
+
+			nodes[i-1].ExitFade = fadeEffectSec
+			nodes[i-1].ExitType = transType
 		}
-		segmentFiles = append(segmentFiles, transSeg)
 
 		trackStarts = append(trackStarts, struct {
 			OffsetMs int
 			Name     string
-		}{totalMs, trackB.Filename})
-		totalMs += int(trans.Duration * 1000)
+		}{currentOffsetMs, t.Filename})
 
-		// Body of track B (from after transition to PlayEnd or next transition start)
-		bBodyStart := trans.BInTime + trans.Duration
-		var bBodyEnd float64
-		if i+1 < len(transitions) {
-			nextTrans := transitions[i+1]
-			bBodyEnd = nextTrans.AOutTime - nextTrans.Duration
-		} else {
-			// Last track: use PlayEnd if set, else Duration
-			if trackB.PlayEnd > bBodyStart {
-				bBodyEnd = trackB.PlayEnd
-			} else {
-				bBodyEnd = trackB.Duration
+		nodes[i].Path = t.Filepath
+		nodes[i].StartSec = startSec
+		nodes[i].EndSec = endSec
+		nodes[i].DelayMs = currentOffsetMs
+
+		currentOffsetMs += int(math.Round(chunkPhysicalDurSec * 1000.0))
+	}
+
+	// -----------------------------------------------------
+	// PCM Canvas Mixed Rendering (Pydub Equivalent)
+	// -----------------------------------------------------
+	var canvas []float32
+
+	for i, n := range nodes {
+		durRaw := n.EndSec - n.StartSec
+		if durRaw < 0 {
+			durRaw = 0
+		}
+
+		baseFilter := fmt.Sprintf("atrim=start=%.3f:end=%.3f,asetpts=PTS-STARTPTS", n.StartSec, n.EndSec)
+
+		// Transition effects
+		entryFilter := ""
+		if n.EntryFade > 0 {
+			switch n.TransType {
+			case "bass_swap":
+				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", n.EntryFade)
+			case "filter_fade":
+				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", n.EntryFade)
+			case "mashup":
+				entryFilter = ",highpass=f=300,volume=1dB"
+			case "cut":
+				// immediate in
+			default:
+				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", n.EntryFade)
 			}
 		}
-		bBodyDur := bBodyEnd - bBodyStart
-		if bBodyDur > 0 {
-			seg := filepath.Join(cacheDir, fmt.Sprintf("body_%d_%s.wav", i+1, randHex(4)))
-			err := extractSegment(trackB.Filepath, bBodyStart, bBodyDur, 1.0, "", seg)
-			if err != nil {
-				return "", "", fmt.Errorf("body%d: %w", i+1, err)
+
+		exitFilter := ""
+		if n.ExitFade > 0 {
+			fadeStart := durRaw - n.ExitFade
+			if fadeStart < 0 {
+				fadeStart = 0
 			}
-			segmentFiles = append(segmentFiles, seg)
-			totalMs += int(bBodyDur * 1000)
+
+			switch n.ExitType {
+			case "bass_swap":
+				exitFilter = fmt.Sprintf(",highpass=f=300,afade=t=out:st=%.3f:d=%.3f", fadeStart, n.ExitFade)
+			case "filter_fade":
+				exitFilter = fmt.Sprintf(",lowpass=f=400,afade=t=out:st=%.3f:d=%.3f", fadeStart, n.ExitFade)
+			case "mashup":
+				exitFilter = ",volume=-1dB"
+			case "cut":
+				exitFilter = fmt.Sprintf(",afade=t=out:st=%.3f:d=0.01", fadeStart)
+			default:
+				exitFilter = fmt.Sprintf(",afade=t=out:st=%.3f:d=%.3f", fadeStart, n.ExitFade)
+			}
 		}
+
+		filterChain := baseFilter + entryFilter + exitFilter
+		pcmPath := filepath.Join(cacheDir, fmt.Sprintf("chunk_%d_%s.pcm", i, randHex(4)))
+
+		// Render this specific filtered chunk to raw PCM floats
+		cmdArgs := []string{
+			"-y", "-i", n.Path,
+			"-map_metadata", "-1",
+			"-af", filterChain,
+			"-f", "f32le", "-ar", "44100", "-ac", "2",
+			pcmPath,
+		}
+
+		cmdRaw := exec.Command(ffmpegPath, cmdArgs...)
+		cmdRaw.Stderr = os.Stderr
+		if err := cmdRaw.Run(); err != nil {
+			log.Printf("Warning: failed to extract PCM chunk %d: %v", i, err)
+			continue
+		}
+
+		// Read PCM into memory
+		b, err := os.ReadFile(pcmPath)
+		if err != nil {
+			log.Printf("Warning: failed to read PCM chunk %d: %v", i, err)
+			continue
+		}
+
+		pcmFloatCount := len(b) / 4
+		offsetSamples := int(float64(n.DelayMs)/1000.0*44100.0) * 2
+		requiredLen := offsetSamples + pcmFloatCount
+
+		// Expand canvas if necessary
+		if len(canvas) < requiredLen {
+			newCanvas := make([]float32, requiredLen)
+			copy(newCanvas, canvas)
+			canvas = newCanvas
+		}
+
+		// Additive Mixing (Overlay)
+		for j := 0; j < pcmFloatCount; j++ {
+			val := math.Float32frombits(binary.LittleEndian.Uint32(b[j*4 : j*4+4]))
+			canvas[offsetSamples+j] += val
+		}
+
+		os.Remove(pcmPath)
 	}
 
-	// 3. Concatenate all segments
-	concatList := filepath.Join(cacheDir, fmt.Sprintf("concat_%s.txt", randHex(4)))
-	var sb strings.Builder
-	for _, f := range segmentFiles {
-		sb.WriteString(fmt.Sprintf("file '%s'\n", strings.ReplaceAll(f, "'", "'\\''")))
-	}
-	os.WriteFile(concatList, []byte(sb.String()), 0644)
+	// -----------------------------------------------------
+	// Write Master Canvas to Disk & Encode Final MP3
+	// -----------------------------------------------------
+	finalPcmPath := filepath.Join(cacheDir, fmt.Sprintf("final_canvas_%s.pcm", randHex(4)))
 
-	cmd := exec.Command(ffmpegPath,
-		"-y", "-f", "concat", "-safe", "0", "-i", concatList,
-		"-b:a", "320k", "-q:a", "0", outputPath,
-	)
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return "", "", fmt.Errorf("concat: %w", err)
+	// Pre-allocate byte array for max speed
+	outPcmBytes := make([]byte, len(canvas)*4)
+	for j := 0; j < len(canvas); j++ {
+		binary.LittleEndian.PutUint32(outPcmBytes[j*4:j*4+4], math.Float32bits(canvas[j]))
 	}
 
-	// 4. Write LRC
+	if err := os.WriteFile(finalPcmPath, outPcmBytes, 0644); err != nil {
+		return "", "", fmt.Errorf("failed to drop master PCM to disk: %w", err)
+	}
+
+	log.Printf("[ffmpeg] encoding final mp3 from master PCM overlay...")
+	encodeArgs := []string{
+		"-y",
+		"-f", "f32le", "-ar", "44100", "-ac", "2",
+		"-i", finalPcmPath,
+		"-af", "volume=-2.0dB", // prevent clipping from additive mixing
+		"-b:a", "320k", "-q:a", "0",
+		outputPath,
+	}
+
+	encCmd := exec.Command(ffmpegPath, encodeArgs...)
+	encCmd.Stderr = os.Stderr
+	encCmd.Stdout = os.Stdout
+	if err := encCmd.Run(); err != nil {
+		return "", "", fmt.Errorf("failed to encode final mp3: %w", err)
+	}
+
+	os.Remove(finalPcmPath)
+
+	// Write LRC
 	lrcPath := strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + ".lrc"
-	writeLRC(trackStarts, lrcPath)
-
-	// 5. Cleanup temp files
-	for _, f := range segmentFiles {
-		os.Remove(f)
-	}
-	os.Remove(concatList)
-
-	log.Printf("[done] mix: %s, lrc: %s", outputPath, lrcPath)
-	return outputPath, lrcPath, nil
-}
-
-func extractSegment(inputPath string, startSec, durSec, speed float64, filterType, outputPath string) error {
-	atempo := buildAtempoFilter(speed)
-	filter := atempo
-	if filterType == "highpass" {
-		filter += ",highpass=f=300"
-	} else if filterType == "lowpass" {
-		filter += ",lowpass=f=400"
-	}
-
-	args := []string{
-		"-y",
-		"-ss", fmt.Sprintf("%.3f", startSec),
-		"-t", fmt.Sprintf("%.3f", durSec),
-		"-i", inputPath,
-		"-af", filter,
-		"-ar", "44100", "-ac", "2",
-		outputPath,
-	}
-	cmd := exec.Command(ffmpegPath, args...)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func renderTransitionSegment(trackAPath, trackBPath string, spec TransitionSpec, outputPath string) error {
-	overlap := spec.Duration
-	speedA := spec.SpeedA
-	speedB := spec.SpeedB
-	if speedA <= 0 {
-		speedA = 1.0
-	}
-	if speedB <= 0 {
-		speedB = 1.0
-	}
-
-	aStart := spec.AOutTime - overlap
-	if aStart < 0 {
-		aStart = 0
-	}
-
-	atempoA := buildAtempoFilter(speedA)
-	atempoB := buildAtempoFilter(speedB)
-
-	fadeDur := overlap / speedA
-	if fadeDur <= 0 {
-		fadeDur = 1
-	}
-
-	var fc string
-	switch spec.Type {
-	case "bass_swap":
-		fc = fmt.Sprintf(
-			"[0:a]%s,highpass=f=300,afade=t=out:st=0:d=%.2f[a];[1:a]%s,afade=t=in:d=%.2f[b];[a][b]amix=inputs=2:duration=shortest:normalize=0[out]",
-			atempoA, fadeDur, atempoB, fadeDur)
-	case "cut":
-		// Discard track A's output with anullsink to prevent unconnected pad errors,
-		// or simply don't route [0:a] anywhere. However, if any input is completely unused
-		// ffmpeg might map it automatically. We'll explicitly sink it.
-		fc = fmt.Sprintf("[0:a]%s,anullsink;[1:a]%s,acopy[out]", atempoA, atempoB)
-	case "mashup":
-		fc = fmt.Sprintf(
-			"[0:a]%s,volume=-1dB[a];[1:a]%s,highpass=f=300,volume=1dB[b];[a][b]amix=inputs=2:duration=shortest:normalize=0[out]",
-			atempoA, atempoB)
-	default: // crossfade, filter_fade
-		fc = fmt.Sprintf(
-			"[0:a]%s,afade=t=out:st=0:d=%.2f[a];[1:a]%s,afade=t=in:d=%.2f[b];[a][b]amix=inputs=2:duration=shortest:normalize=0[out]",
-			atempoA, fadeDur, atempoB, fadeDur)
-	}
-
-	args := []string{
-		"-y",
-		"-ss", fmt.Sprintf("%.3f", aStart), "-t", fmt.Sprintf("%.3f", overlap), "-i", trackAPath,
-		"-ss", fmt.Sprintf("%.3f", spec.BInTime), "-t", fmt.Sprintf("%.3f", overlap), "-i", trackBPath,
-		"-filter_complex", fc,
-		"-map", "[out]",
-		"-ar", "44100", "-ac", "2",
-		outputPath,
-	}
-	cmd := exec.Command(ffmpegPath, args...)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func buildAtempoFilter(speed float64) string {
-	if speed <= 0 || (speed > 0.99 && speed < 1.01) {
-		return "anull"
-	}
-	// atempo accepts 0.5 to 100.0; chain for values outside range
-	var parts []string
-	s := speed
-	for s < 0.5 {
-		parts = append(parts, "atempo=0.5")
-		s /= 0.5
-	}
-	for s > 100.0 {
-		parts = append(parts, "atempo=100.0")
-		s /= 100.0
-	}
-	parts = append(parts, fmt.Sprintf("atempo=%.4f", s))
-	return strings.Join(parts, ",")
-}
-
-func writeLRC(trackStarts []struct {
-	OffsetMs int
-	Name     string
-}, path string) {
-	var sb strings.Builder
-	sb.WriteString("[ar:DJ Bot Auto Mix]\n")
-	sb.WriteString("[ti:Hip-Hop Club Mix]\n")
-	sb.WriteString("[al:Auto Generated]\n")
-	sb.WriteString("[by:DJ Bot Go Worker]\n\n")
+	var lrcSb strings.Builder
+	lrcSb.WriteString("[ar:DJ Bot Auto Mix]\n[ti:Go Native PCM Canvas Mix]\n[al:Auto Generated]\n[by:DJ Bot]\n\n")
 
 	for _, ts := range trackStarts {
 		sec := float64(ts.OffsetMs) / 1000.0
 		m := int(sec) / 60
 		s := sec - float64(m*60)
-		// Strip extension robustly — handles names like "artist - song.mp3"
 		ext := filepath.Ext(ts.Name)
 		name := ts.Name
 		if ext != "" {
 			name = strings.TrimSuffix(ts.Name, ext)
 		}
-		sb.WriteString(fmt.Sprintf("[%02d:%05.2f] %s\n", m, s, name))
+		lrcSb.WriteString(fmt.Sprintf("[%02d:%05.2f] %s\n", m, s, name))
 	}
-	os.WriteFile(path, []byte(sb.String()), 0644)
-	log.Printf("[lrc] %d tracks written to %s", len(trackStarts), path)
+	os.WriteFile(lrcPath, []byte(lrcSb.String()), 0644)
+
+	// Cleanup Normalized WAVs
+	for _, wPath := range wavMap {
+		os.Remove(wPath)
+	}
+
+	log.Printf("[done] canvas overlay successfully created mix: %s, lrc: %s", outputPath, lrcPath)
+	return outputPath, lrcPath, nil
+}
+
+func buildAtempoFilter(speed float64, pitchStep float64) string {
+	filter := ""
+
+	// Handle tempo speed change
+	if speed > 0 && !(speed > 0.99 && speed < 1.01) {
+		filter += fmt.Sprintf("atempo=%.4f", speed)
+	}
+
+	// Handle pitch shifting natively if requested
+	if pitchStep != 0.0 {
+		if filter != "" {
+			filter += ","
+		}
+		filter += fmt.Sprintf("rubberband=pitch=%.2f", pitchStep)
+	}
+
+	if filter == "" {
+		return "anull"
+	}
+	return filter
 }
 
 func init() {
