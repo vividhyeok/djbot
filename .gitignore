@@ -37,3 +37,17 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Tauri full target dir (absolute path variant)
+app/src-tauri/target/
+
+# Runtime data
+cache/
+uploads/
+
+# MSI / installer bundle output
+*.msi
+app/src-tauri/target/release/bundle/
+
+# User config
+weights.json

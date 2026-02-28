@@ -61,12 +61,26 @@ pub fn run() {
             // Find ffmpeg
             let ffmpeg = find_ffmpeg();
 
+            // Resolve data directory: in dev it should be the project root (sibling of 'app')
+            // to avoid triggering tauri dev restarts. In production it's the app data dir.
+            let data_dir = if cfg!(debug_assertions) {
+                let mut p = std::env::current_dir().unwrap_or_default();
+                while p.ends_with("src-tauri") || p.ends_with("app") {
+                    p.pop();
+                }
+                p
+            } else {
+                app.path().app_data_dir().unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
+            };
+            std::fs::create_dir_all(&data_dir).ok();
+
             let port_arc = Arc::clone(&port_state_clone);
             std::thread::spawn(move || {
                 let mut cmd = Command::new(&sidecar_path);
                 if let Some(ff) = ffmpeg {
                     cmd.args(["--ffmpeg", &ff]);
                 }
+                cmd.args(["--data-dir", &data_dir.to_string_lossy()]);
                 cmd.stdout(Stdio::piped())
                    .stderr(Stdio::inherit());
 

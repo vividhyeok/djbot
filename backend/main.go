@@ -17,6 +17,7 @@ import (
 
 var cacheDir = "cache"
 var uploadsDir = "cache/uploads"
+var outputDir = "output"
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,17 +34,28 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 func main() {
 	ffmpegFlag := flag.String("ffmpeg", "", "Path to ffmpeg executable")
+	dataDirFlag := flag.String("data-dir", ".", "Root directory for cache and output")
 	flag.Parse()
+
 	if *ffmpegFlag != "" {
 		os.Setenv("FFMPEG_PATH", *ffmpegFlag)
 	}
+
+	// Adjust paths based on data-dir
+	if *dataDirFlag != "." {
+		absData, _ := filepath.Abs(*dataDirFlag)
+		cacheDir = filepath.Join(absData, "cache")
+		uploadsDir = filepath.Join(cacheDir, "uploads")
+		outputDir = filepath.Join(absData, "output")
+	}
+
 	initFFmpeg()
 	initYtdlp()
 
 	// Ensure directories
 	os.MkdirAll(cacheDir, 0755)
 	os.MkdirAll(uploadsDir, 0755)
-	os.MkdirAll("output", 0755)
+	os.MkdirAll(outputDir, 0755)
 
 	mux := http.NewServeMux()
 
@@ -61,6 +73,7 @@ func main() {
 	mux.HandleFunc("POST /weights", handleSaveWeights)
 	mux.HandleFunc("POST /export/zip", handleExportZip)
 	mux.HandleFunc("POST /cache/clear", handleCacheClear)
+	mux.HandleFunc("GET /files/serve", handleServeFile)
 
 	// Listen on random port
 	listener, err := net.Listen("tcp", ":0")

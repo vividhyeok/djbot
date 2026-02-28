@@ -139,7 +139,9 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 		cmd := exec.Command(ffmpegPath, "-y", "-i", t.Filepath,
 			"-map_metadata", "-1",
 			"-ar", "44100", "-ac", "2", "-sample_fmt", "s16",
-			"-af", "loudnorm=I=-14:TP=-2.0:LRA=11",
+			// dynaudnorm: does NOT change file duration (unlike loudnorm single-pass),
+			// so prevChunkMs iTheory remains accurate enough for xfade clamping.
+			"-af", "dynaudnorm=f=150:g=15:p=0.95",
 			wavPath,
 		)
 		if err := cmd.Run(); err != nil {
@@ -150,205 +152,223 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 		}
 	}
 
-	// Calculate absolute times on the master timeline
-	// Each slice needs [StartTimeSec, EndTimeSec] from its source,
-	// and AbsoluteMs to be delayed by.
-	type timelineNode struct {
-		Path      string
-		StartSec  float64
-		EndSec    float64
-		DelayMs   int     // Absolute position in the final mix
-		TransType string  // entry transition type for THIS node
-		EntryFade float64 // entry fade duration in seconds
-		ExitType  string  // exit transition type for THIS node
-		ExitFade  float64 // exit fade duration in seconds
-	}
-
-	nodes := make([]timelineNode, len(playlist))
+	// -------------------------------------------------------
+	// Single-loop: timeline planning + PCM overlay combined
+	// prevActualChunkMs is derived from the real FFmpeg output
+	// (byte count) instead of the theory value, eliminating
+	// the LRC drift that accumulates over many tracks.
+	// -------------------------------------------------------
+	var canvas []float32
 	var trackStarts []struct {
 		OffsetMs int
 		Name     string
 	}
 
 	currentOffsetMs := 0
-	prevChunkMs := 0
+	prevActualChunkMs := 0 // real PCM length of the **previous** track (ms)
 
+	// We still need to know entry/exit fade per track upfront because
+	// the exit fade of track[i] depends on knowing the crossfade of
+	// track[i+1], which hasn't been processed yet.
+	// Solution: compute all fades in a tiny pre-pass (no FFmpeg calls),
+	// then run the single PCM loop.
+	type fadeInfo struct {
+		EntryFade float64
+		EntryType string
+		ExitFade  float64
+		ExitType  string
+	}
+	fades := make([]fadeInfo, len(playlist))
+
+	// Pre-pass: compute xfade durations using theory lengths only for clamping.
+	// These determine the fade envelopes applied to each chunk.
+	{
+		prevTheoryMs := 0
+		for i := 0; i < len(playlist); i++ {
+			t := playlist[i]
+			startSec := t.PlayStart
+			endSec := t.PlayEnd
+			if endSec <= 0 {
+				endSec = t.Duration
+			}
+			if startSec < 0 {
+				startSec = 0
+			}
+			if startSec >= endSec-15.0 {
+				startSec = math.Max(0, endSec-15.0)
+			}
+			chunkTheorySec := endSec - startSec
+
+			if i > 0 {
+				trans := transitions[i-1]
+				xfadeMs := int(math.Round(trans.Duration * 1000.0))
+				if xfadeMs < 4000 {
+					xfadeMs = 4000
+				}
+				maxByPrev := prevTheoryMs - 1000
+				maxByB := int(chunkTheorySec*1000.0) - 5000
+				if xfadeMs > maxByPrev && maxByPrev > 0 {
+					xfadeMs = maxByPrev
+				}
+				if xfadeMs > maxByB && maxByB > 0 {
+					xfadeMs = maxByB
+				}
+				if xfadeMs < 0 {
+					xfadeMs = 0
+				}
+				fadeSec := float64(xfadeMs) / 1000.0
+				fades[i].EntryFade = fadeSec
+				fades[i].EntryType = trans.Type
+				fades[i-1].ExitFade = fadeSec
+				fades[i-1].ExitType = trans.Type
+			}
+			prevTheoryMs = int(math.Round(chunkTheorySec * 1000.0))
+		}
+	}
+
+	// Main single loop: for each track, clamp xfade using prevActualChunkMs,
+	// extract PCM, record LRC from real offsetSamples, mix into canvas.
 	for i := 0; i < len(playlist); i++ {
 		t := playlist[i]
 
 		startSec := t.PlayStart
 		endSec := t.PlayEnd
-
-		// PlayEnd must always be >= Duration because we set it to Duration in ComputePlayBounds.
-		// But just in case, guarantee it's the full track if zero/negative.
 		if endSec <= 0 {
 			endSec = t.Duration
 		}
-
-		// CRITICAL: startSec must NEVER be >= endSec. Clamp hard.
 		if startSec < 0 {
 			startSec = 0
 		}
 		if startSec >= endSec-15.0 {
 			startSec = math.Max(0, endSec-15.0)
 		}
+		chunkTheorySec := endSec - startSec
 
-		// Total physical audio chunk length we decode from this track
-		chunkPhysicalDurSec := endSec - startSec
-
-		var xfadeDurMs int = 0
-		var transType string = "crossfade"
-
+		// ── Step 1: xfade clamping (actual prev chunk length) ──────────────
 		if i > 0 {
 			trans := transitions[i-1]
-			transType = trans.Type
-			// Crossfade duration in milliseconds from the plan
-			xfadeDurMs = int(math.Round(trans.Duration * 1000.0))
-
-			// Floor crossfade at 4 seconds minimum for audible effect
-			if xfadeDurMs < 4000 {
-				xfadeDurMs = 4000
+			xfadeMs := int(math.Round(trans.Duration * 1000.0))
+			if xfadeMs < 4000 {
+				xfadeMs = 4000
+			}
+			// Use prevActualChunkMs (real PCM size) — not theory
+			maxByPrev := prevActualChunkMs - 1000
+			maxByB := int(chunkTheorySec*1000.0) - 5000
+			if xfadeMs > maxByPrev && maxByPrev > 0 {
+				xfadeMs = maxByPrev
+			}
+			if xfadeMs > maxByB && maxByB > 0 {
+				xfadeMs = maxByB
+			}
+			if xfadeMs < 0 {
+				xfadeMs = 0
 			}
 
-			// Clamp: can't overlap MORE than what has been rendered so far (prev chunk)
-			// AND can't overlap more than B's total duration - 5s
-			maxByPrev := prevChunkMs - 1000
-			maxByB := int(chunkPhysicalDurSec*1000.0) - 5000
-			if xfadeDurMs > maxByPrev && maxByPrev > 0 {
-				xfadeDurMs = maxByPrev
-			}
-			if xfadeDurMs > maxByB && maxByB > 0 {
-				xfadeDurMs = maxByB
-			}
-			if xfadeDurMs < 0 {
-				xfadeDurMs = 0
-			}
-
-			// Pydub core mechanism: overlap = subtract crossfade from timeline position
-			currentOffsetMs -= xfadeDurMs
+			// ── Step 2: overlay position ───────────────────────────────────
+			currentOffsetMs -= xfadeMs
 			if currentOffsetMs < 0 {
 				currentOffsetMs = 0
 			}
-
-			fadeSec := float64(xfadeDurMs) / 1000.0
-			nodes[i].EntryFade = fadeSec
-			nodes[i].TransType = transType
-			nodes[i-1].ExitFade = fadeSec
-			nodes[i-1].ExitType = transType
 		}
 
-		log.Printf("[timeline] track[%d] %s: start=%.1fs end=%.1fs chunk=%.1fs offset=%dms xfade=%dms",
-			i, t.Filename, startSec, endSec, chunkPhysicalDurSec, currentOffsetMs, xfadeDurMs)
+		log.Printf("[render] track[%d] %s: start=%.1fs end=%.1fs offset=%dms (prevActual=%dms)",
+			i, t.Filename, startSec, endSec, currentOffsetMs, prevActualChunkMs)
 
-		trackStarts = append(trackStarts, struct {
-			OffsetMs int
-			Name     string
-		}{currentOffsetMs, t.Filename})
-
-		nodes[i].Path = t.Filepath
-		nodes[i].StartSec = startSec
-		nodes[i].EndSec = endSec
-		nodes[i].DelayMs = currentOffsetMs
-
-		prevChunkMs = int(math.Round(chunkPhysicalDurSec * 1000.0))
-		currentOffsetMs += prevChunkMs
-	}
-
-	// -----------------------------------------------------
-	// PCM Canvas Mixed Rendering (Pydub Equivalent)
-	// -----------------------------------------------------
-	var canvas []float32
-
-	for i, n := range nodes {
-		durRaw := n.EndSec - n.StartSec
+		// Build FFmpeg filter chain (entry/exit fades from pre-pass)
+		f := fades[i]
+		durRaw := endSec - startSec
 		if durRaw < 0 {
 			durRaw = 0
 		}
 
-		baseFilter := fmt.Sprintf("atrim=start=%.3f:end=%.3f,asetpts=PTS-STARTPTS", n.StartSec, n.EndSec)
+		baseFilter := fmt.Sprintf("atrim=start=%.3f:end=%.3f,asetpts=PTS-STARTPTS", startSec, endSec)
 
-		// Transition effects
 		entryFilter := ""
-		if n.EntryFade > 0 {
-			switch n.TransType {
+		if f.EntryFade > 0 {
+			switch f.EntryType {
 			case "bass_swap":
-				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", n.EntryFade)
+				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", f.EntryFade)
 			case "filter_fade":
-				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", n.EntryFade)
+				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", f.EntryFade)
 			case "mashup":
 				entryFilter = ",highpass=f=300,volume=1dB"
 			case "cut":
-				// immediate in
+				// immediate in — no filter
 			default:
-				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", n.EntryFade)
+				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", f.EntryFade)
 			}
 		}
 
 		exitFilter := ""
-		if n.ExitFade > 0 {
-			fadeStart := durRaw - n.ExitFade
+		if f.ExitFade > 0 {
+			fadeStart := durRaw - f.ExitFade
 			if fadeStart < 0 {
 				fadeStart = 0
 			}
-
-			switch n.ExitType {
+			switch f.ExitType {
 			case "bass_swap":
-				exitFilter = fmt.Sprintf(",highpass=f=300,afade=t=out:st=%.3f:d=%.3f", fadeStart, n.ExitFade)
+				exitFilter = fmt.Sprintf(",highpass=f=300,afade=t=out:st=%.3f:d=%.3f", fadeStart, f.ExitFade)
 			case "filter_fade":
-				exitFilter = fmt.Sprintf(",lowpass=f=400,afade=t=out:st=%.3f:d=%.3f", fadeStart, n.ExitFade)
+				exitFilter = fmt.Sprintf(",lowpass=f=400,afade=t=out:st=%.3f:d=%.3f", fadeStart, f.ExitFade)
 			case "mashup":
 				exitFilter = ",volume=-1dB"
 			case "cut":
 				exitFilter = fmt.Sprintf(",afade=t=out:st=%.3f:d=0.01", fadeStart)
 			default:
-				exitFilter = fmt.Sprintf(",afade=t=out:st=%.3f:d=%.3f", fadeStart, n.ExitFade)
+				exitFilter = fmt.Sprintf(",afade=t=out:st=%.3f:d=%.3f", fadeStart, f.ExitFade)
 			}
 		}
 
 		filterChain := baseFilter + entryFilter + exitFilter
 		pcmPath := filepath.Join(cacheDir, fmt.Sprintf("chunk_%d_%s.pcm", i, randHex(4)))
 
-		// Render this specific filtered chunk to raw PCM floats
-		cmdArgs := []string{
-			"-y", "-i", n.Path,
+		// ── Step 3: FFmpeg → PCM ───────────────────────────────────────────
+		cmdRaw := exec.Command(ffmpegPath,
+			"-y", "-i", t.Filepath,
 			"-map_metadata", "-1",
 			"-af", filterChain,
 			"-f", "f32le", "-ar", "44100", "-ac", "2",
 			pcmPath,
-		}
-
-		cmdRaw := exec.Command(ffmpegPath, cmdArgs...)
+		)
 		cmdRaw.Stderr = os.Stderr
 		if err := cmdRaw.Run(); err != nil {
 			log.Printf("Warning: failed to extract PCM chunk %d: %v", i, err)
 			continue
 		}
 
-		// Read PCM into memory
+		// ── Step 4: read PCM → real sample count ───────────────────────────
 		b, err := os.ReadFile(pcmPath)
 		if err != nil {
 			log.Printf("Warning: failed to read PCM chunk %d: %v", i, err)
 			continue
 		}
-
 		pcmFloatCount := len(b) / 4
-		offsetSamples := int(float64(n.DelayMs)/1000.0*44100.0) * 2
-		requiredLen := offsetSamples + pcmFloatCount
 
-		// Expand canvas if necessary
+		// ── Step 5: LRC trackStarts — from real currentOffsetMs ───────────
+		trackStarts = append(trackStarts, struct {
+			OffsetMs int
+			Name     string
+		}{currentOffsetMs, t.Filename})
+
+		// ── Step 6: canvas additive overlay ───────────────────────────────
+		offsetSamples := int(float64(currentOffsetMs)/1000.0*44100.0) * 2
+		requiredLen := offsetSamples + pcmFloatCount
 		if len(canvas) < requiredLen {
 			newCanvas := make([]float32, requiredLen)
 			copy(newCanvas, canvas)
 			canvas = newCanvas
 		}
-
-		// Additive Mixing (Overlay)
 		for j := 0; j < pcmFloatCount; j++ {
 			val := math.Float32frombits(binary.LittleEndian.Uint32(b[j*4 : j*4+4]))
 			canvas[offsetSamples+j] += val
 		}
-
 		os.Remove(pcmPath)
+
+		// ── Step 7: prevActualChunkMs from real byte count ─────────────────
+		prevActualChunkMs = pcmFloatCount * 1000 / (44100 * 2)
+
+		// ── Step 8: advance timeline ───────────────────────────────────────
+		currentOffsetMs += prevActualChunkMs
 	}
 
 	// -----------------------------------------------------

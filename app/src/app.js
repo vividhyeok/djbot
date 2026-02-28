@@ -87,6 +87,26 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fmt = sec => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const fileUrl = p => p ? convertFileSrc(p) : '';
 
+// ── Download helper (prevents Tauri navigation) ──────────────
+// Instead of setting href = asset:// URL which causes Tauri to navigate away,
+// we fetch the file via the backend HTTP server and trigger a Blob download.
+async function fetchAndDownload(filePath, filename) {
+  if (!filePath) return;
+  try {
+    const res = await fetch(api('/files/serve') + '?path=' + encodeURIComponent(filePath));
+    if (!res.ok) throw new Error('파일 서빙 실패: ' + res.status);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  } catch (e) {
+    toast('다운로드 실패: ' + e.message, 'error');
+  }
+}
+
 // ── Toast Notification ─────────────────────────────────
 const toastEl = document.getElementById('toastContainer');
 function toast(msg, type = '', duration = 4000) {
@@ -330,7 +350,9 @@ async function renderFinalMix() {
     duration: t.duration,
     bpm: t.bpm,
     play_start: state.selectedTrans[i - 1]?.b_in_time ?? 0,
-    play_end: state.selectedTrans[i]?.a_out_time ?? t.duration,
+    play_end: state.selectedTrans[i]
+      ? Math.min(state.selectedTrans[i].a_out_time + state.selectedTrans[i].duration, t.duration)
+      : t.duration,
   }));
 
   try {
@@ -395,10 +417,8 @@ function renderResultVersions() {
   }
 
   // Links
-  $('downloadMp3Btn').href = fileUrl(curr.data.mp3_path);
-  $('downloadMp3Btn').download = `AutoMix_${curr.title}.mp3`;
-  $('downloadLrcBtn').href = fileUrl(curr.data.lrc_path);
-  $('downloadLrcBtn').download = `AutoMix_${curr.title}.lrc`;
+  $('downloadMp3Btn').onclick = () => fetchAndDownload(curr.data.mp3_path, `AutoMix_${curr.title}.mp3`);
+  $('downloadLrcBtn').onclick = () => fetchAndDownload(curr.data.lrc_path, `AutoMix_${curr.title}.lrc`);
 
   // Draw timeline
   renderTimeline(curr);

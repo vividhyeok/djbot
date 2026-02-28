@@ -3,11 +3,13 @@ package main
 import (
 	"archive/zip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ExportZipRequest expects absolute paths to an MP3 and an LRC file
@@ -92,7 +94,7 @@ func addFileToZip(zw *zip.Writer, filePath, zipFilePath string) error {
 // handleCacheClear deletes contents of uploads and output directories
 func handleCacheClear(w http.ResponseWriter, r *http.Request) {
 	clearDir(uploadsDir)
-	clearDir("output")
+	clearDir(outputDir)
 	// Also clean up any _preview.mp3 and _analysis.json files in cache root if they got placed there
 	clearPatternMatch(cacheDir, "*_preview.mp3")
 	clearPatternMatch(cacheDir, "*_analysis.json")
@@ -121,4 +123,43 @@ func clearPatternMatch(dirPath, pattern string) {
 	for _, f := range files {
 		os.Remove(f)
 	}
+}
+
+// handleServeFile serves a local file as a binary stream for downloading.
+// This prevents Tauri from navigating when setting asset:// URLs on <a> tags.
+func handleServeFile(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "path is required", 400)
+		return
+	}
+
+	// Security: basic check to prevent arbitrary file access
+	absPath, _ := filepath.Abs(path)
+	cwd, _ := filepath.Abs(".")
+	if !strings.HasPrefix(strings.ToLower(absPath), strings.ToLower(cwd)) {
+		// Allow if it's in the data_dir (which might be outside cwd in dev)
+		absData, _ := filepath.Abs(cacheDir)
+		if !strings.HasPrefix(strings.ToLower(absPath), strings.ToLower(filepath.Dir(absData))) {
+			http.Error(w, "forbidden path", 403)
+			return
+		}
+	}
+
+	f, err := os.Open(absPath)
+	if err != nil {
+		http.Error(w, "file not found: "+err.Error(), 404)
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		http.Error(w, "stat error", 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filepath.Base(absPath)))
+	http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), f)
 }

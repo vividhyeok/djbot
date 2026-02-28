@@ -746,7 +746,8 @@ h6 {
 }
 
 .dropdown-content {
-  display: none;
+  display: block;
+  /* Always block, controlled by visibility */
   position: absolute;
   right: 0;
   top: 100%;
@@ -758,9 +759,17 @@ h6 {
   z-index: 10;
   border: 1px solid var(--border);
   overflow: hidden;
+
+  /* Transition for delayed appearance */
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+  transition-delay: 0.4s;
+  /* Wait 0.4s before showing */
 }
 
-.dropdown-content a {
+.dropdown-content a,
+.dropdown-content button {
   color: var(--color-text);
   padding: 12px 16px;
   text-decoration: none;
@@ -768,14 +777,22 @@ h6 {
   font-size: 13px;
   transition: background 0.2s;
   cursor: pointer;
+  /* Reset button defaults */
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
 }
 
-.dropdown-content a:hover {
+.dropdown-content a:hover,
+.dropdown-content button:hover {
   background-color: var(--color-surface);
 }
 
 .dropdown:hover .dropdown-content {
-  display: block;
+  opacity: 1;
+  visibility: visible;
 }
 
 .flex {
