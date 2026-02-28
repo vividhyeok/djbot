@@ -123,7 +123,7 @@ function toast(msg, type = '', duration = 4000) {
 }
 
 // ── YouTube download ──────────────────────────────────────────
-ytDownloadBtn.addEventListener('click', async () => {
+function initiateYtDownload() {
   const url = ytUrl.value.trim();
   if (!url) { showYtStatus('URL을 입력하세요', 'err'); toast('URL을 입력하세요', 'error'); return; }
   const max = parseInt(ytMax.value) || 20;
@@ -131,11 +131,27 @@ ytDownloadBtn.addEventListener('click', async () => {
   ytDownloadBtn.disabled = true;
   showYtStatus('⏳ 다운로드 중... (몇 분 걸릴 수 있습니다)', '');
 
+  return { url, max };
+}
+
+ytUrl.addEventListener('keyup', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (!ytDownloadBtn.disabled) {
+      ytDownloadBtn.click();
+    }
+  }
+});
+
+ytDownloadBtn.addEventListener('click', async () => {
+  const args = initiateYtDownload();
+  if (!args) return;
+
   try {
     const data = await workerFetch('/download/youtube', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, max_tracks: max }),
+      body: JSON.stringify({ url: args.url, max_tracks: args.max }),
     });
     if (data.error) throw new Error(data.error);
 
@@ -275,6 +291,23 @@ async function uploadLocalFiles() {
 smartMixBtn.addEventListener('click', smartMix);
 
 async function smartMix() {
+  if (state.tracks.length < 2) {
+    alert('최소 2곡을 추가하세요 (분석 완료 상태여야 함).');
+    return;
+  }
+
+  // 이전에 생성된 state 정보를 깊은 수준에서 클리어하여 꼬임 방지
+  state.plan = null;
+  state.selectedTrans = [];
+  state.previews = {};
+
+  // UI 완전 초기화
+  resultPanel.classList.add('hidden');
+  document.getElementById('resultLinks')?.replaceChildren();
+  document.getElementById('lyricsContent')?.replaceChildren();
+
+  smartMixBtn.disabled = true;
+  setProgress('스마트 믹스 기획 중...', 20, '곡들의 BPM, Key, 에너지 분석 결과를 최적 정렬합니다.');
   showPanel('progress');
   setProgress('파일 준비 중...', 5);
 
@@ -332,6 +365,8 @@ async function smartMix() {
   } catch (e) {
     toast('스마트 믹스 실패: ' + e.message, 'error', 6000);
     showPanel('empty');
+  } finally {
+    smartMixBtn.disabled = false;
   }
 }
 
@@ -349,6 +384,7 @@ async function renderFinalMix() {
     filename: t.filepath.split(/[\\/]/).pop(),
     duration: t.duration,
     bpm: t.bpm,
+    loudness_db: t.loudness_db,
     play_start: state.selectedTrans[i - 1]?.b_in_time ?? 0,
     play_end: state.selectedTrans[i]
       ? Math.min(state.selectedTrans[i].a_out_time + state.selectedTrans[i].duration, t.duration)
@@ -379,8 +415,10 @@ async function renderFinalMix() {
     renderResultVersions();
     showPanel('result');
   } catch (e) {
-    toast('믹스 생성 실패: ' + e.message, 'error', 6000);
+    toast('최종 믹스 실패: ' + e.message, 'error', 8000);
     showPanel('empty');
+  } finally {
+    smartMixBtn.disabled = false;
   }
 }
 

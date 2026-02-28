@@ -1,109 +1,39 @@
-# DJ Bot - AutoMix 🎧
+# AutoMix DJ Bot 🎧
 
-YouTube 플레이리스트를 분석해 자동으로 DJ 믹스를 생성하는 데스크탑 앱.  
-**Tauri v2 (프론트엔드) + Go (백엔드)** 구조로, FFmpeg/yt-dlp를 활용합니다.
+AutoMix DJ Bot은 유튜브 플레이리스트나 로컬 파일로부터 음악을 가져와, 인공지능 음악 분석을 통해 자동으로 자연스러운 DJ 믹스(Non-stop Mix)를 생성해주는 데스크탑 애플리케이션입니다.
 
----
+![App Logo](app/src/app-icon.svg)
 
-## ✨ 주요 기능
+## ✨ 핵심 기능
 
-| 기능 | 설명 |
-|------|------|
-| YouTube 플레이리스트 다운로드 | yt-dlp로 최대 N곡 일괄 다운로드 |
-| 오디오 분석 | BPM, 키, 에너지, 세그먼트(Intro/Chorus/Outro 등) 분석 |
-| 자동 믹스 플래닝 | Greedy NNS로 트랙 순서 최적화 + 5가지 트랜지션 후보 생성 |
-| PCM Canvas 렌더링 | 실측 기반 단일 루프로 MP3 + LRC(타임스탬프) 동시 생성 |
-| 멀티 버전 믹스 | 여러 버전을 생성·비교·선택 가능 |
-| ZIP / 단건 다운로드 | MP3, LRC 파일을 ZIP 또는 개별로 다운로드 |
-| 캐시 초기화 | 임시 파일 및 캐시 일괄 삭제 |
+- **스마트 음악 분석**: BPM(템포), Key(조성), Energy(에너지 레벨) 및 곡의 구조(Intro/Outro)를 분석합니다.
+- **하모닉 믹싱 (Harmonic Mixing)**: Camelot Wheel 기반으로 서로 어울리는 조성을 가진 곡들을 우선적으로 배치하여 음악적인 믹스를 생성합니다.
+- **자동 전환 기술**: 곡의 특성에 따라 Crossfade, Bass Swap, Filter Fade 등 다양한 전이 기법을 자동으로 선택합니다.
+- **yt-dlp 자가 관리**: 실행 시마다 최신 유튜브 우회 패치를 자동으로 체크하여 다운로드 중단(403 Forbidden) 문제를 최소화합니다.
+- **멀티 플랫폼 지원**: Windows, macOS, Linux에서 모두 사용 가능합니다.
 
----
+## 🚀 시작하기
 
-## 🛠 Tech Stack
+### 설치 방법
+1. [GitHub Releases](https://github.com/vividhyeok/djbot/releases)에서 본인의 OS에 맞는 설치 파일을 다운로드합니다.
+2. 설치 후 앱을 실행합니다.
 
-- **Frontend**: Tauri v2, Vanilla JS, CSS
-- **Backend**: Go (HTTP worker, sidecar 방식)
-- **Audio**: FFmpeg (`dynaudnorm` 정규화, f32le PCM canvas 합성)
-- **Downloader**: yt-dlp
+### 사용법
+1. **유튜브 링크 입력**: 유튜브 뮤직 플레이리스트 링크를 넣고 `Download`를 누르거나 엔터를 칩니다.
+2. **또는 로컬 파일**: 직접 MP3/WAV 파일을 드래그 앤 드롭으로 추가할 수 있습니다.
+3. **Smart Mix**: 곡 목록이 준비되면 아래의 큰 버튼을 눌러 믹스 생성을 시작합니다.
+4. **결과 확인**: 생성이 완료되면 믹스된 MP3 파일과 가사 동기화용 LRC 파일을 확인할 수 있습니다.
 
----
+## 🛠️ 기술 스택
 
-## 🚀 개발 환경 설정
+- **Frontend**: Tauri, Vanilla JS, CSS3 (Glassmorphism UI)
+- **Backend**: Go (Audio processing, CLI worker)
+- **Audio Engine**: FFmpeg (Custom PCM renderer)
+- **Automation**: GitHub Actions (Cross-platform builds)
 
-### 사전 설치
+## ⚖️ 라이선스
 
-- [Node.js](https://nodejs.org/) 18+
-- [Go](https://go.dev/) 1.21+
-- [Rust & Cargo](https://www.rust-lang.org/) (Tauri 빌드)
-- [FFmpeg](https://ffmpeg.org/) — PATH에 등록
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — PATH에 등록
-
-### 개발 서버 실행
-
-```powershell
-# 1. 프로세스 정리 (이미 실행 중이면)
-taskkill /F /IM tauri-app.exe /T
-taskkill /F /IM goworker-x86_64-pc-windows-msvc.exe /T
-
-# 2. Go worker 빌드
-cd backend
-go build -o ..\app\src-tauri\binaries\goworker-x86_64-pc-windows-msvc.exe .
-
-# 3. Tauri dev 서버 실행
-cd ..\app
-npm install   # 최초 1회
-npm run tauri dev
-```
-
-> **주의**: 개발 모드에서 Go worker는 `cache/`, `output/` 폴더를 프로젝트 루트(`djbot/`)에 생성합니다.  
-> (Tauri가 `src-tauri/` 디렉토리 변경을 감지해 재시작하는 것을 방지하기 위함)
-
-### 프로덕션 빌드 (MSI)
-
-```powershell
-cd app
-npm run tauri build
-# 결과물: app/src-tauri/target/release/bundle/msi/
-```
+이 프로젝트는 개인적인 용도의 음악 믹싱 도구로 개발되었습니다. 유튜브 다운로드 시 저작권 규정을 준수하시기 바랍니다.
 
 ---
-
-## 📐 아키텍처
-
-```
-[Frontend: app/src]          [Backend: backend/]
-  app.js ──────────────────▶ main.go (HTTP router)
-    │  POST /plan              planner.go  ← 트랙 정렬 + 트랜지션 후보
-    │  POST /render/mix        renderer.go ← PCM canvas 단일 루프 렌더링
-    │  POST /download/youtube  downloader.go
-    │  POST /analyze           analyzer.go
-    └── Tauri invoke ─────▶  lib.rs (sidecar 관리, data-dir 전달)
-```
-
-### 믹싱 엔진 상세
-
-**트랙 순서 결정**: 키 거리 + BPM 차이 + 에너지 기반 Greedy NNS  
-**트랜지션 종류**: `crossfade` / `bass_swap` / `filter_fade` / `mashup` / `cut` (5종)  
-**렌더링 방식**: 각 트랙을 f32le PCM으로 추출 → float32 canvas 배열에 additive overlay  
-**LRC 동기화**: 이론값 대신 실제 `offsetSamples`에서 역산 → 드리프트 없음
-
----
-
-## 📁 프로젝트 구조
-
-```
-djbot/
-├── app/                       # Tauri 앱 (프론트엔드)
-│   ├── src/                   # HTML / JS / CSS
-│   └── src-tauri/             # Tauri 설정 및 Rust 코드
-├── backend/                   # Go HTTP worker
-│   ├── main.go                # 라우터 및 서버 시작
-│   ├── planner.go             # 믹스 플래닝
-│   ├── renderer.go            # PCM canvas 렌더링 + LRC 생성
-│   ├── analyzer.go            # FFmpeg 기반 오디오 분석
-│   ├── downloader.go          # yt-dlp 래퍼
-│   └── simulate_test.go       # 타임라인 시뮬레이션 테스트
-├── cache/                     # 런타임 임시 파일 (gitignore)
-├── output/                    # 생성된 MP3/LRC (gitignore)
-└── README.md
-```
+Created by [vividhyeok](https://github.com/vividhyeok)

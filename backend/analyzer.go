@@ -66,6 +66,7 @@ func decodeToPCM(path string) ([]float32, int, error) {
 		"-ar", fmt.Sprintf("%d", sr),
 		"-",
 	)
+	hideWindow(cmd)
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

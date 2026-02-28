@@ -149,6 +149,11 @@ func GenerateMixPlan(tracks []TrackAnalysis, typeWeights map[string]float64, bar
 
 // --- Internal helpers ---
 
+func idealEnergy(position float64) float64 {
+	// Bell curve: 0 -> 0.7 rising, 0.7 -> 1.0 falling
+	return math.Sin(position*math.Pi*0.9)*0.6 + 0.4
+}
+
 func sortPlaylist(tracks []TrackAnalysis) []TrackAnalysis {
 	if len(tracks) == 0 {
 		return tracks
@@ -161,13 +166,37 @@ func sortPlaylist(tracks []TrackAnalysis) []TrackAnalysis {
 		current := sorted[len(sorted)-1]
 		bestIdx := 0
 		bestScore := math.Inf(-1)
+
+		// ── Phase 3 (C-2): Energy Arc position calculation ──
+		position := float64(len(sorted)) / float64(len(tracks))
+		targetEnergy := idealEnergy(position)
+
 		for i, t := range remaining {
 			score := 0.0
-			keyDist := keyDistance(current.Key, t.Key)
-			score += math.Max(0, 60-float64(keyDist)*10)
+			keyDist := camelotDistance(current.Key, t.Key)
+			// Perfect match = 0, relative = 10, completely off = 60+ penalty
+			score += math.Max(0, 60-float64(keyDist))
+
 			bpmDiff := math.Abs(t.BPM - current.BPM)
 			score += math.Max(0, 20-bpmDiff)
-			score += avgEnergy(t) * 20
+
+			// ── Phase 3 (C-2): Energy Arc penalty ──
+			tE := avgEnergy(t)
+			energyPenalty := math.Abs(tE - targetEnergy)
+			// Base score for energy is max 20
+			score += math.Max(0, 20-energyPenalty*20)
+
+			// ── Phase 3 (C-3): BPM Gradient Bonus ──
+			if len(sorted) >= 2 {
+				prev2BPM := sorted[len(sorted)-2].BPM
+				trend := current.BPM - prev2BPM
+				if trend > 0 && t.BPM > current.BPM {
+					score += 5.0 // bonus for maintaining upward momentum
+				} else if trend < 0 && t.BPM < current.BPM {
+					score += 5.0 // bonus for maintaining downward momentum
+				}
+			}
+
 			if score > bestScore {
 				bestScore = score
 				bestIdx = i
@@ -225,6 +254,90 @@ func keyDistance(k1, k2 string) int {
 	return d
 }
 
+var camelotMap = map[string]struct {
+	num  int
+	mode string
+}{
+	"B": {1, "B"}, "F#": {2, "B"}, "Db": {3, "B"}, "Ab": {4, "B"}, "Eb": {5, "B"}, "Bb": {6, "B"},
+	"F": {7, "B"}, "C": {8, "B"}, "G": {9, "B"}, "D": {10, "B"}, "A": {11, "B"}, "E": {12, "B"},
+	"G#m": {1, "A"}, "D#m": {2, "A"}, "Bbm": {3, "A"}, "Fm": {4, "A"}, "Cm": {5, "A"}, "Gm": {6, "A"},
+	"Dm": {7, "A"}, "Am": {8, "A"}, "Em": {9, "A"}, "Bm": {10, "A"}, "F#m": {11, "A"}, "C#m": {12, "A"},
+}
+
+func camelotDistance(k1, k2 string) int {
+	c1, ok1 := camelotMap[k1]
+	c2, ok2 := camelotMap[k2]
+	if !ok1 || !ok2 {
+		return keyDistance(k1, k2) * 10 // fallback
+	}
+
+	distNum := c1.num - c2.num
+	if distNum < 0 {
+		distNum = -distNum
+	}
+	if distNum > 6 {
+		distNum = 12 - distNum
+	}
+
+	if c1.mode == c2.mode {
+		if distNum <= 1 {
+			return 0 // perfect harmonic match
+		}
+		return (distNum - 1) * 10
+	} else {
+		// different modes (A vs B)
+		if distNum == 0 {
+			return 10 // relative major/minor
+		}
+		return distNum * 10
+	}
+}
+
+func selectTransitionType(ta, tb TrackAnalysis, typeW map[string]float64) string {
+	energyDiff := avgEnergy(tb) - avgEnergy(ta)
+	keyDist := camelotDistance(ta.Key, tb.Key)
+	bpmDiff := math.Abs(ta.BPM - tb.BPM)
+
+	choices := make(map[string]float64)
+	if val, ok := typeW["crossfade"]; ok {
+		choices["crossfade"] = val
+	} else {
+		choices["crossfade"] = 0.5
+	}
+
+	if keyDist <= 10 && bpmDiff < 5.0 {
+		if val, ok := typeW["mashup"]; ok {
+			choices["mashup"] = val
+		}
+		if val, ok := typeW["bass_swap"]; ok {
+			choices["bass_swap"] = val
+		}
+	} else if energyDiff > 0.2 {
+		if val, ok := typeW["bass_swap"]; ok {
+			choices["bass_swap"] = val
+		}
+	} else if energyDiff < -0.2 {
+		if val, ok := typeW["filter_fade"]; ok {
+			choices["filter_fade"] = val
+		}
+	} else if bpmDiff > 10.0 {
+		if val, ok := typeW["cut"]; ok {
+			choices["cut"] = val
+		}
+	}
+
+	bestType := "crossfade"
+	bestScore := math.Inf(-1)
+	for t, w := range choices {
+		score := w * (0.5 + rand.Float64()) // random variance
+		if score > bestScore {
+			bestScore = score
+			bestType = t
+		}
+	}
+	return bestType
+}
+
 func generateCandidates(ta, tb TrackAnalysis, typeW map[string]float64, barW map[int]float64, count int) []TransitionSpec {
 	bars := weightedIntKeys(barW)
 
@@ -252,12 +365,37 @@ func generateCandidates(ta, tb TrackAnalysis, typeW map[string]float64, barW map
 
 	var cands []TransitionSpec
 	for i := 0; i < count; i++ {
-		// ed031c0b mixing behavior: force native crossfade only
-		tType := "crossfade"
+		// ── Phase 1 (D-1): Auto transition type selection ──
+		tType := selectTransitionType(ta, tb, typeW)
 		pickedBars := bars[rand.Intn(len(bars))]
 
-		exitSeg := pickSegment(segsA, []string{"Chorus", "Verse", "Bridge", "Outro"})
-		entrySeg := pickSegment(segsB, []string{"Intro", "Verse", "Chorus", "Bridge"})
+		var exitSeg Segment
+		var entrySeg Segment
+
+		// ── Phase 3 (E-2): Utilize highlights if available ──
+		if len(ta.Highlights) > 0 && rand.Float64() > 0.3 {
+			bestH := ta.Highlights[0]
+			for _, h := range ta.Highlights {
+				if h.Score > bestH.Score {
+					bestH = h
+				}
+			}
+			exitSeg = Segment{Time: bestH.EndTime, Label: "Highlight"}
+		} else {
+			exitSeg = pickSegment(segsA, []string{"Chorus", "Verse", "Bridge", "Outro"})
+		}
+
+		if len(tb.Highlights) > 0 && rand.Float64() > 0.3 {
+			bestH := tb.Highlights[0]
+			for _, h := range tb.Highlights {
+				if h.Score > bestH.Score {
+					bestH = h
+				}
+			}
+			entrySeg = Segment{Time: bestH.StartTime, Label: "Highlight"}
+		} else {
+			entrySeg = pickSegment(segsB, []string{"Intro", "Verse", "Chorus", "Bridge"})
+		}
 
 		// Avoid boring Outro->Intro
 		for exitSeg.Label == "Outro" && entrySeg.Label == "Intro" && rand.Float64() > 0.05 {
@@ -265,8 +403,8 @@ func generateCandidates(ta, tb TrackAnalysis, typeW map[string]float64, barW map
 			entrySeg = pickSegment(segsB, []string{"Intro", "Verse", "Chorus", "Bridge"})
 		}
 
-		aOut := snapGrid(exitSeg.Time+20, beatTimesA, 16)
-		bIn := snapGrid(entrySeg.Time, beatTimesB, 16)
+		aOut := snapToPhrase(exitSeg.Time+20, ta.Phrases, beatTimesA, 16)
+		bIn := snapToPhrase(entrySeg.Time, tb.Phrases, beatTimesB, 16)
 
 		beatDur := 60.0 / targetBPM
 		dur := float64(pickedBars) * 4 * beatDur
@@ -313,6 +451,10 @@ func selectBest(cands []TransitionSpec, typeW map[string]float64, barW map[int]f
 func pickSegment(segs []Segment, labels []string) Segment {
 	var pool []Segment
 	for _, s := range segs {
+		// ── Phase 2 (B-3): Avoid heavy vocals during entry/exit ──
+		if s.VocalEnergy > 0.6 {
+			continue // heavy vocal, might clash
+		}
 		for _, l := range labels {
 			if s.Label == l {
 				pool = append(pool, s)
@@ -320,6 +462,18 @@ func pickSegment(segs []Segment, labels []string) Segment {
 			}
 		}
 	}
+	// Fallback if all were rejected
+	if len(pool) == 0 {
+		for _, s := range segs {
+			for _, l := range labels {
+				if s.Label == l {
+					pool = append(pool, s)
+					break
+				}
+			}
+		}
+	}
+
 	if len(pool) == 0 && len(segs) > 0 {
 		return segs[rand.Intn(len(segs))]
 	}
@@ -327,6 +481,23 @@ func pickSegment(segs []Segment, labels []string) Segment {
 		return Segment{Time: 0, Label: "Verse", Energy: 0.5}
 	}
 	return pool[rand.Intn(len(pool))]
+}
+
+func snapToPhrase(timeSec float64, phrases []float64, beats []float64, grid int) float64 {
+	if len(phrases) > 0 {
+		best, bestD := phrases[0], math.Abs(phrases[0]-timeSec)
+		for _, p := range phrases[1:] {
+			if d := math.Abs(p - timeSec); d < bestD {
+				bestD = d
+				best = p
+			}
+		}
+		// Snapping is acceptable if the closest phrase boundary is within ~15 seconds.
+		if bestD < 15.0 {
+			return best
+		}
+	}
+	return snapGrid(timeSec, beats, grid)
 }
 
 func snapGrid(timeSec float64, beats []float64, grid int) float64 {

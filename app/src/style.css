@@ -875,11 +875,23 @@ h6 {
   }
 }
 
-/* ── Utils ──────────────────────────── */
+/* ── Utilities ────────────────────────── */
 .hidden {
   display: none !important;
 }
 
+@keyframes spin {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.spin-anim {
+  animation: spin 2s linear infinite;
+  transform-origin: center;
+}
+
+/* ── Brand Guidelines Specific Overrides ── */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

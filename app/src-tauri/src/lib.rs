@@ -31,6 +31,18 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(WorkerState { port: Arc::clone(&port_state) })
         .invoke_handler(tauri::generate_handler![get_worker_port, get_output_dir])
+        .on_window_event(|_window, event| match event {
+            tauri::WindowEvent::Destroyed => {
+                // Kill any lingering Go worker processes on application exit
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/IM", "goworker-x86_64-pc-windows-msvc.exe", "/T"])
+                    .output();
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/IM", "goworker.exe", "/T"])
+                    .output();
+            }
+            _ => {}
+        })
         .setup(move |app| {
             // Resolve sidecar path
             let resource_path = app

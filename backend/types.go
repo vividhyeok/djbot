@@ -71,12 +71,13 @@ type RenderMixRequest struct {
 }
 
 type TrackEntry struct {
-	Filepath  string  `json:"filepath"`
-	Filename  string  `json:"filename"`
-	Duration  float64 `json:"duration"`
-	BPM       float64 `json:"bpm"`
-	PlayStart float64 `json:"play_start"`
-	PlayEnd   float64 `json:"play_end"`
+	Filepath   string  `json:"filepath"`
+	Filename   string  `json:"filename"`
+	Duration   float64 `json:"duration"`
+	BPM        float64 `json:"bpm"`
+	LoudnessDB float64 `json:"loudness_db"`
+	PlayStart  float64 `json:"play_start"`
+	PlayEnd    float64 `json:"play_end"`
 }
 
 type RenderMixResponse struct {

@@ -18,18 +18,38 @@ func initYtdlp() {
 		ytdlpPath = p
 		return
 	}
-	if path, err := exec.LookPath("yt-dlp"); err == nil {
+
+	// 1. Check local directory first (important for bundled installers)
+	exePath, _ := os.Executable()
+	localPath := filepath.Join(filepath.Dir(exePath), "yt-dlp.exe")
+	if _, err := os.Stat(localPath); err == nil {
+		ytdlpPath = localPath
+	} else if _, err := os.Stat("yt-dlp.exe"); err == nil {
+		abs, _ := filepath.Abs("yt-dlp.exe")
+		ytdlpPath = abs
+	} else if path, err := exec.LookPath("yt-dlp"); err == nil {
+		// 2. Fallback to system PATH
 		ytdlpPath = path
-		return
 	}
-	for _, c := range []string{"yt-dlp.exe", filepath.Join(".", "yt-dlp.exe")} {
-		if _, err := os.Stat(c); err == nil {
-			abs, _ := filepath.Abs(c)
-			ytdlpPath = abs
-			return
+
+	if ytdlpPath == "yt-dlp" {
+		log.Println("[yt-dlp] not found in local or PATH")
+	} else {
+		log.Printf("[yt-dlp] using: %s", ytdlpPath)
+	}
+
+	// ── Auto-update yt-dlp in the background to fix 403 Forbidden errors ──
+	go func() {
+		log.Printf("[yt-dlp] attempting auto-update on startup: %s -U", ytdlpPath)
+		// We use -U to ensure even if it's an old version on another PC, it gets patched.
+		cmd := exec.Command(ytdlpPath, "-U")
+		hideWindow(cmd)
+		if err := cmd.Run(); err != nil {
+			log.Printf("[yt-dlp] auto-update failed: %v", err)
+		} else {
+			log.Printf("[yt-dlp] auto-update completed successfully.")
 		}
-	}
-	log.Println("[yt-dlp] not found in PATH")
+	}()
 }
 
 type DownloadRequest struct {
@@ -75,13 +95,12 @@ func DownloadYouTubePlaylist(url, outputDir string, maxTracks int) ([]Downloaded
 		"--no-playlist-reverse",
 		"--no-warnings",
 		"--no-part",
-		"--no-mtime",
 		"--no-cache-dir",
-		"--ignore-errors", // Don't abort on error (continue if one video is unavailable)
-		"--geo-bypass",    // Attempt to bypass geographic restrictions
+		"--ignore-errors",
+		"--geo-bypass",
 		"--add-metadata",
-		// Removed --restrict-filenames to preserve non-English titles natively
-		// Removed --extractor-args "youtube:player-client=ios,android,web" due to recent "Video unavailable" issues
+		// User-agent helps with bot detection
+		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
 		"--print", "after_move:filepath",
 	}
 	if maxTracks > 0 {
@@ -91,7 +110,8 @@ func DownloadYouTubePlaylist(url, outputDir string, maxTracks int) ([]Downloaded
 	log.Printf("[yt-dlp] Downloading: %s (max=%d)", url, maxTracks)
 
 	cmd := exec.Command(ytdlpPath, args...)
-	// Force Python to use UTF-8 for stdout so Korean parent-directory chars are not corrupted.
+	hideWindow(cmd)
+	// Force Python to use UTF-8 for stdout so Korean chars are not corrupted.
 	cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
 
 	out, err := cmd.Output()
@@ -114,7 +134,7 @@ func DownloadYouTubePlaylist(url, outputDir string, maxTracks int) ([]Downloaded
 
 		absPath := filepath.Join(outputDir, name)
 		if _, statErr := os.Stat(absPath); statErr != nil {
-			log.Printf("[yt-dlp] file not found: %s (raw line: %q)", name, line)
+			log.Printf("[yt-dlp] file not found: %s", name)
 			continue
 		}
 		title := strings.TrimSuffix(name, filepath.Ext(name))
