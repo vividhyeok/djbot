@@ -77,11 +77,11 @@ func DownloadYouTubePlaylist(url, outputDir string, maxTracks int) ([]Downloaded
 		"--no-part",
 		"--no-mtime",
 		"--no-cache-dir",
-		"--extractor-args", "youtube:player-client=ios,android,web",
+		"--ignore-errors", // Don't abort on error (continue if one video is unavailable)
+		"--geo-bypass",    // Attempt to bypass geographic restrictions
 		"--add-metadata",
-		"--restrict-filenames",
-		// Print full path after move; we take only the basename in Go.
-		// Full path may have Korean parent dirs — fixed by PYTHONUTF8=1 below.
+		// Removed --restrict-filenames to preserve non-English titles natively
+		// Removed --extractor-args "youtube:player-client=ios,android,web" due to recent "Video unavailable" issues
 		"--print", "after_move:filepath",
 	}
 	if maxTracks > 0 {
@@ -95,15 +95,10 @@ func DownloadYouTubePlaylist(url, outputDir string, maxTracks int) ([]Downloaded
 	cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
 
 	out, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("yt-dlp failed: %w\n%s", err, string(exitErr.Stderr))
-		}
-		return nil, fmt.Errorf("yt-dlp failed: %w", err)
-	}
 
-	// Each line is the full path (UTF-8 now). We extract the basename to avoid
-	// any remaining encoding ambiguity, then join with our Go-correct outputDir.
+	// In --ignore-errors mode, yt-dlp exits with non-zero if ANY video in the playlist fails.
+	// But it still prints the successful paths to stdout.
+	// So we process stdout first, and only return a hard error if NO files were downloaded at all.
 	var files []DownloadedFile
 	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -111,7 +106,7 @@ func DownloadYouTubePlaylist(url, outputDir string, maxTracks int) ([]Downloaded
 		if line == "" {
 			continue
 		}
-		name := filepath.Base(line) // ASCII basename (restrict-filenames)
+		name := filepath.Base(line) // Native Unicode basename
 		if seen[name] {
 			continue
 		}
@@ -130,6 +125,14 @@ func DownloadYouTubePlaylist(url, outputDir string, maxTracks int) ([]Downloaded
 			Title:    title,
 		})
 		log.Printf("[yt-dlp] Ready: %s", name)
+	}
+
+	// If NO files were successfully downloaded, THEN return the original command error
+	if len(files) == 0 && err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("yt-dlp failed: %w\n%s", err, string(exitErr.Stderr))
+		}
+		return nil, fmt.Errorf("yt-dlp failed: %w", err)
 	}
 
 	return files, nil
