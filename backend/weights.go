@@ -8,7 +8,8 @@ import (
 	"path/filepath"
 )
 
-const weightsFile = "preference_weights.json"
+// weightsFilePath is set to an absolute path by main() after dirs are configured.
+var weightsFilePath = "preference_weights.json"
 
 // DefaultWeights returns factory-default transition type and bar weights.
 func DefaultWeights() WeightsConfig {
@@ -35,7 +36,7 @@ type WeightsConfig struct {
 
 // loadWeights reads weights from disk, falling back to defaults.
 func loadWeights() WeightsConfig {
-	data, err := os.ReadFile(weightsFile)
+	data, err := os.ReadFile(weightsFilePath)
 	if err != nil {
 		return DefaultWeights()
 	}
@@ -53,11 +54,11 @@ func saveWeights(cfg WeightsConfig) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(weightsFile)
+	dir := filepath.Dir(weightsFilePath)
 	if dir != "." {
 		os.MkdirAll(dir, 0755)
 	}
-	return os.WriteFile(weightsFile, data, 0644)
+	return os.WriteFile(weightsFilePath, data, 0644)
 }
 
 // handleGetWeights returns current weights (file or defaults).

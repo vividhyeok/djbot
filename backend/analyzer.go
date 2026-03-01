@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 )
 
@@ -119,7 +120,13 @@ func saveCachedAnalysis(cachePath string, ta *TrackAnalysis) error {
 		return err
 	}
 	os.MkdirAll(filepath.Dir(cachePath), 0755)
-	return os.WriteFile(cachePath, data, 0644)
+	// Write to a temp file first, then rename — this is atomic on POSIX and
+	// near-atomic on Windows, preventing a half-written cache file on crash.
+	tmp := cachePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, cachePath)
 }
 
 // AnalyzeTrack runs the full analysis pipeline on a single track
@@ -189,8 +196,12 @@ func AnalyzeBatch(paths []string, cacheDir string) ([]TrackAnalysis, []string) {
 	errors := make([]string, len(paths))
 	var wg sync.WaitGroup
 
-	// Limit concurrency to NumCPU
-	sem := make(chan struct{}, 4)
+	// Limit concurrency: cap at 4 to avoid thrashing disk/ffmpeg on low-core machines
+	concurrency := runtime.NumCPU()
+	if concurrency > 4 {
+		concurrency = 4
+	}
+	sem := make(chan struct{}, concurrency)
 
 	for i, p := range paths {
 		wg.Add(1)

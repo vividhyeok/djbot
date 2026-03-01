@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -9,15 +10,87 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"crypto/rand"
-	mrand "math/rand"
 )
 
 func randHex(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+// clampPlayBounds enforces a 30s minimum chunk and a 15s fallback guard.
+// Extracted from the duplicated pre-pass / main-loop guards.
+func clampPlayBounds(startSec, endSec, duration float64) (float64, float64) {
+	if endSec <= 0 {
+		endSec = duration
+	}
+	if startSec < 0 {
+		startSec = 0
+	}
+	if endSec-startSec < 30.0 {
+		needed := 30.0 - (endSec - startSec)
+		if endSec+needed <= duration {
+			endSec += needed
+		} else {
+			endSec = duration
+			startSec = math.Max(0, endSec-30.0)
+		}
+	}
+	if startSec >= endSec-15.0 {
+		startSec = math.Max(0, endSec-15.0)
+	}
+	return startSec, endSec
+}
+
+// trimSilenceEnd scans backward from the end of a normalized WAV file and
+// returns the effective duration (seconds) by skipping trailing silence below
+// -40 dBFS.  Uses ReadAt for seek-based access — no full-file read (~17 KB
+// per 100 ms iteration instead of ~30 MB).
+func trimSilenceEnd(wavPath string) float64 {
+	f, err := os.Open(wavPath)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return 0
+	}
+	fileSize := info.Size()
+	if fileSize <= 44 {
+		return 0
+	}
+
+	// WAV: 44-byte header, then interleaved 16-bit stereo samples at 44100 Hz.
+	dataBytes := fileSize - 44
+	totalSamples := dataBytes / 2    // one int16 = 2 bytes
+	chunkSamples := int64(4410 * 2)  // 100 ms × 2 channels = 8820 samples
+	chunkBytes := chunkSamples * 2   // 17640 bytes per iteration
+	buf := make([]byte, chunkBytes)
+
+	effSamples := totalSamples
+	for j := totalSamples - chunkSamples; j >= 0; j -= chunkSamples {
+		n, _ := f.ReadAt(buf, 44+j*2)
+		if n == 0 {
+			break
+		}
+		count := n / 2
+		var sumSq float64
+		for k := 0; k < count; k++ {
+			v := float64(int16(binary.LittleEndian.Uint16(buf[k*2:k*2+2]))) / 32768.0
+			sumSq += v * v
+		}
+		rms := math.Sqrt(sumSq / float64(count))
+		if 20.0*math.Log10(rms+1e-9) > -40.0 {
+			effSamples = j + chunkSamples
+			break
+		}
+	}
+	return float64(effSamples) / (44100.0 * 2.0)
 }
 
 // RenderPreview renders a transition preview using ffmpeg filter_complex
@@ -56,8 +129,6 @@ func RenderPreview(trackAPath, trackBPath string, spec TransitionSpec, cacheDir 
 	// Build filter_complex based on transition type
 	var filterComplex string
 
-	// Speed filter (atempo only supports 0.5-100.0, chain for larger changes)
-	// Speed filter (atempo only supports 0.5-100.0, chain for larger changes)
 	atempoA := buildAtempoFilter(speedA, 0.0)
 	atempoB := buildAtempoFilter(speedB, spec.PitchStepB)
 
@@ -116,11 +187,12 @@ func RenderPreview(trackAPath, trackBPath string, spec TransitionSpec, cacheDir 
 
 	log.Printf("[render preview] %s -> %s (%s)", filepath.Base(trackAPath), filepath.Base(trackBPath), spec.Type)
 
+	var previewStderr bytes.Buffer
 	cmd := exec.Command(ffmpegPath, args...)
 	hideWindow(cmd)
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = &previewStderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("ffmpeg preview: %w", err)
+		return "", fmt.Errorf("ffmpeg preview: %w\n%s", err, previewStderr.String())
 	}
 	return outputPath, nil
 }
@@ -133,50 +205,54 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 
 	log.Printf("[render mix] %d tracks, %d transitions (Go Native Mega filter_complex)", len(playlist), len(transitions))
 
-	// Ensure tracks are pre-converted/normalized so timing is guaranteed length
-	var wavMap []string
+	// ── Parallel WAV normalization (up to 4 concurrent ffmpeg processes) ──
+	type normResult struct {
+		wavPath string
+		playEnd float64
+		ok      bool
+	}
+	normResults := make([]normResult, len(playlist))
+	var normWg sync.WaitGroup
+	normSem := make(chan struct{}, 4)
+
 	for i, t := range playlist {
-		wavPath := filepath.Join(cacheDir, fmt.Sprintf("norm_%s.wav", randHex(6)))
-		cmd := exec.Command(ffmpegPath, "-y", "-i", t.Filepath,
-			"-map_metadata", "-1",
-			"-ar", "44100", "-ac", "2", "-sample_fmt", "s16",
-			// loudnorm: standardizes integrated loudness to -14 LUFS, prevents clipping
-			"-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
-			wavPath,
-		)
-		hideWindow(cmd)
-		if err := cmd.Run(); err != nil {
-			log.Printf("Warning: failed to convert to wav: %v", err)
-		} else {
-			playlist[i].Filepath = wavPath
-			wavMap = append(wavMap, wavPath)
+		normWg.Add(1)
+		go func(idx int, track TrackEntry) {
+			defer normWg.Done()
+			normSem <- struct{}{}
+			defer func() { <-normSem }()
 
-			// ── Phase 3 (B-4): Outro silence trim ──
-			if b, err := os.ReadFile(wavPath); err == nil && len(b) > 44 {
-				samples := (len(b) - 44) / 2 // 16-bit samples
-				chunkSize := 4410 * 2        // 100ms of stereo 44.1kHz
-				effSamples := samples
+			wavPath := filepath.Join(cacheDir, fmt.Sprintf("norm_%s.wav", randHex(6)))
+			var normStderr bytes.Buffer
+			cmd := exec.Command(ffmpegPath, "-y", "-i", track.Filepath,
+				"-map_metadata", "-1",
+				"-ar", "44100", "-ac", "2", "-sample_fmt", "s16",
+				"-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
+				wavPath,
+			)
+			hideWindow(cmd)
+			cmd.Stderr = &normStderr
+			if err := cmd.Run(); err != nil {
+				log.Printf("Warning: failed to convert to wav [%d]: %v", idx, err)
+				return
+			}
+			normResults[idx] = normResult{
+				wavPath: wavPath,
+				playEnd: trimSilenceEnd(wavPath),
+				ok:      true,
+			}
+		}(i, t)
+	}
+	normWg.Wait()
 
-				for j := samples - chunkSize; j >= 0; j -= chunkSize {
-					var sumSq float64
-					for k := 0; k < chunkSize; k++ {
-						idx := 44 + (j+k)*2
-						val := float64(int16(binary.LittleEndian.Uint16(b[idx:idx+2]))) / 32768.0
-						sumSq += val * val
-					}
-					rms := math.Sqrt(sumSq / float64(chunkSize))
-					dbFS := 20.0 * math.Log10(rms+1e-9)
-
-					if dbFS > -40.0 {
-						effSamples = j + chunkSize
-						break
-					}
-				}
-
-				newDur := float64(effSamples) / (44100.0 * 2.0)
-				if playlist[i].PlayEnd <= 0 || playlist[i].PlayEnd > newDur {
-					playlist[i].PlayEnd = newDur
-				}
+	// Apply normalization results (sequential, no race)
+	var wavMap []string
+	for i, res := range normResults {
+		if res.ok {
+			playlist[i].Filepath = res.wavPath
+			wavMap = append(wavMap, res.wavPath)
+			if playlist[i].PlayEnd <= 0 || playlist[i].PlayEnd > res.playEnd {
+				playlist[i].PlayEnd = res.playEnd
 			}
 		}
 	}
@@ -210,40 +286,17 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 	fades := make([]fadeInfo, len(playlist))
 
 	// Pre-pass: compute xfade durations using theory lengths only for clamping.
-	// These determine the fade envelopes applied to each chunk.
 	{
 		prevTheoryMs := 0
 		for i := 0; i < len(playlist); i++ {
 			t := playlist[i]
-			startSec := t.PlayStart
-			endSec := t.PlayEnd
-			if endSec <= 0 {
-				endSec = t.Duration
-			}
-			if startSec < 0 {
-				startSec = 0
-			}
-			// ── Phase 1: 30s min chunk guard ──
-			if endSec-startSec < 30.0 {
-				needed := 30.0 - (endSec - startSec)
-				if endSec+needed <= t.Duration {
-					endSec += needed
-				} else {
-					endSec = t.Duration
-					startSec = math.Max(0, endSec-30.0)
-				}
-			}
-			// Fallback guard just in case
-			if startSec >= endSec-15.0 {
-				startSec = math.Max(0, endSec-15.0)
-			}
+			startSec, endSec := clampPlayBounds(t.PlayStart, t.PlayEnd, t.Duration)
 			chunkTheorySec := endSec - startSec
 
 			if i > 0 {
 				trans := transitions[i-1]
 				xfadeMs := int(math.Round(trans.Duration * 1000.0))
 
-				// ── Phase 3 (B-1): Beat-aligned minimum xfade ──
 				avgBPM := (playlist[i-1].BPM + t.BPM) / 2.0
 				if avgBPM <= 0 {
 					avgBPM = 120.0
@@ -259,7 +312,6 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 
 				maxByPrev := prevTheoryMs - 1000
 				maxByB := int(chunkTheorySec*1000.0) - 5000
-				// ── Phase 1: max xfade 40% of shorter chunk ──
 				maxBy40pct := int(math.Min(float64(prevTheoryMs), chunkTheorySec*1000.0) * 0.4)
 
 				if xfadeMs > maxByPrev && maxByPrev > 0 {
@@ -289,32 +341,7 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 	for i := 0; i < len(playlist); i++ {
 		t := playlist[i]
 
-		startSec := t.PlayStart
-		endSec := t.PlayEnd
-		if endSec <= 0 {
-			endSec = t.Duration
-		}
-		if startSec < 0 {
-			startSec = 0
-		}
-		// ── Phase 1: 30s min chunk guard ──
-		if endSec-startSec < 30.0 {
-			needed := 30.0 - (endSec - startSec)
-			if endSec+needed <= t.Duration {
-				endSec += needed
-				// Fallback guard just in case
-				if startSec >= endSec-15.0 {
-					startSec = math.Max(0, endSec-15.0)
-				}
-			} else {
-				endSec = t.Duration
-				startSec = math.Max(0, endSec-30.0)
-			}
-		}
-		// Fallback guard just in case
-		if startSec >= endSec-15.0 {
-			startSec = math.Max(0, endSec-15.0)
-		}
+		startSec, endSec := clampPlayBounds(t.PlayStart, t.PlayEnd, t.Duration)
 		chunkTheorySec := endSec - startSec
 
 		// ── Step 1: xfade clamping (actual prev chunk length) ──────────────
@@ -322,7 +349,6 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 			trans := transitions[i-1]
 			xfadeMs := int(math.Round(trans.Duration * 1000.0))
 
-			// ── Phase 3 (B-1): Beat-aligned minimum xfade ──
 			avgBPM := (playlist[i-1].BPM + t.BPM) / 2.0
 			if avgBPM <= 0 {
 				avgBPM = 120.0
@@ -339,7 +365,6 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 			// Use prevActualChunkMs (real PCM size) — not theory
 			maxByPrev := prevActualChunkMs - 1000
 			maxByB := int(chunkTheorySec*1000.0) - 5000
-			// ── Phase 1: max xfade 40% of shorter chunk ──
 			maxBy40pct := int(math.Min(float64(prevActualChunkMs), chunkTheorySec*1000.0) * 0.4)
 
 			if xfadeMs > maxByPrev && maxByPrev > 0 {
@@ -423,6 +448,7 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 		pcmPath := filepath.Join(cacheDir, fmt.Sprintf("chunk_%d_%s.pcm", i, randHex(4)))
 
 		// ── Step 3: FFmpeg → PCM ───────────────────────────────────────────
+		var chunkStderr bytes.Buffer
 		cmdRaw := exec.Command(ffmpegPath,
 			"-y", "-i", t.Filepath,
 			"-map_metadata", "-1",
@@ -431,9 +457,9 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 			pcmPath,
 		)
 		hideWindow(cmdRaw)
-		cmdRaw.Stderr = os.Stderr
+		cmdRaw.Stderr = &chunkStderr
 		if err := cmdRaw.Run(); err != nil {
-			log.Printf("Warning: failed to extract PCM chunk %d: %v", i, err)
+			log.Printf("Warning: failed to extract PCM chunk %d: %v\n%s", i, err, chunkStderr.String())
 			continue
 		}
 
@@ -460,8 +486,7 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 			canvas = newCanvas
 		}
 		for j := 0; j < pcmFloatCount; j++ {
-			val := math.Float32frombits(binary.LittleEndian.Uint32(b[j*4 : j*4+4]))
-			canvas[offsetSamples+j] += val
+			canvas[offsetSamples+j] += math.Float32frombits(binary.LittleEndian.Uint32(b[j*4 : j*4+4]))
 		}
 		os.Remove(pcmPath)
 
@@ -479,10 +504,8 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 			fadeLen = len(canvas)
 		}
 		startIdx := len(canvas) - fadeLen
-		// For loop iterates by 2 (Left, Right channels) but effectively applies to both equally
 		for i := 0; i < fadeLen; i++ {
-			ratio := 1.0 - float32(i)/float32(fadeLen)
-			canvas[startIdx+i] *= ratio
+			canvas[startIdx+i] *= 1.0 - float32(i)/float32(fadeLen)
 		}
 	}
 
@@ -493,8 +516,8 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 
 	// Pre-allocate byte array for max speed
 	outPcmBytes := make([]byte, len(canvas)*4)
-	for j := 0; j < len(canvas); j++ {
-		binary.LittleEndian.PutUint32(outPcmBytes[j*4:j*4+4], math.Float32bits(canvas[j]))
+	for j, v := range canvas {
+		binary.LittleEndian.PutUint32(outPcmBytes[j*4:j*4+4], math.Float32bits(v))
 	}
 
 	if err := os.WriteFile(finalPcmPath, outPcmBytes, 0644); err != nil {
@@ -506,18 +529,17 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 		"-y",
 		"-f", "f32le", "-ar", "44100", "-ac", "2",
 		"-i", finalPcmPath,
-		// ── Phase 2 (A-6): alimiter for preventing additive mixing clipping ──
 		"-af", "alimiter=limit=0.89:attack=5:release=50:level=false",
 		"-b:a", "320k", "-q:a", "0",
 		outputPath,
 	}
 
+	var encStderr bytes.Buffer
 	encCmd := exec.Command(ffmpegPath, encodeArgs...)
 	hideWindow(encCmd)
-	encCmd.Stderr = os.Stderr
-	encCmd.Stdout = os.Stdout
+	encCmd.Stderr = &encStderr
 	if err := encCmd.Run(); err != nil {
-		return "", "", fmt.Errorf("failed to encode final mp3: %w", err)
+		return "", "", fmt.Errorf("failed to encode final mp3: %w\n%s", err, encStderr.String())
 	}
 
 	os.Remove(finalPcmPath)
@@ -531,11 +553,7 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 		sec := float64(ts.OffsetMs) / 1000.0
 		m := int(sec) / 60
 		s := sec - float64(m*60)
-		ext := filepath.Ext(ts.Name)
-		name := ts.Name
-		if ext != "" {
-			name = strings.TrimSuffix(ts.Name, ext)
-		}
+		name := strings.TrimSuffix(ts.Name, filepath.Ext(ts.Name))
 		lrcSb.WriteString(fmt.Sprintf("[%02d:%05.2f] %s\n", m, s, name))
 	}
 	os.WriteFile(lrcPath, []byte(lrcSb.String()), 0644)
@@ -552,12 +570,10 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 func buildAtempoFilter(speed float64, pitchStep float64) string {
 	filter := ""
 
-	// Handle tempo speed change
 	if speed > 0 && !(speed > 0.99 && speed < 1.01) {
 		filter += fmt.Sprintf("atempo=%.4f", speed)
 	}
 
-	// Handle pitch shifting natively if requested
 	if pitchStep != 0.0 {
 		if filter != "" {
 			filter += ","
@@ -569,8 +585,4 @@ func buildAtempoFilter(speed float64, pitchStep float64) string {
 		return "anull"
 	}
 	return filter
-}
-
-func init() {
-	mrand.New(mrand.NewSource(0)) // suppress unused import
 }

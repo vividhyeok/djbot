@@ -18,6 +18,7 @@ import (
 var cacheDir = "cache"
 var uploadsDir = "cache/uploads"
 var outputDir = "output"
+var binDir = "bin" // managed directory for self-downloaded binaries (e.g. yt-dlp)
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +48,12 @@ func main() {
 		cacheDir = filepath.Join(absData, "cache")
 		uploadsDir = filepath.Join(cacheDir, "uploads")
 		outputDir = filepath.Join(absData, "output")
+		binDir = filepath.Join(absData, "bin")
+		weightsFilePath = filepath.Join(absData, "preference_weights.json")
 	}
+
+	// Wire the managed bin directory to the downloader before init.
+	ytdlpBinDir = binDir
 
 	initFFmpeg()
 	initYtdlp()

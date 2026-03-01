@@ -125,6 +125,16 @@ func clearPatternMatch(dirPath, pattern string) {
 	}
 }
 
+// isChildPath reports whether child is rooted inside parent.
+// Uses filepath.Rel so it is correct on case-sensitive (Linux) filesystems.
+func isChildPath(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return !strings.HasPrefix(rel, "..")
+}
+
 // handleServeFile serves a local file as a binary stream for downloading.
 // This prevents Tauri from navigating when setting asset:// URLs on <a> tags.
 func handleServeFile(w http.ResponseWriter, r *http.Request) {
@@ -134,16 +144,15 @@ func handleServeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Security: basic check to prevent arbitrary file access
+	// Security: only allow paths inside cwd or the data directory.
+	// filepath.Rel-based check is correct on case-sensitive (Linux) filesystems
+	// unlike the previous strings.ToLower prefix comparison.
 	absPath, _ := filepath.Abs(path)
 	cwd, _ := filepath.Abs(".")
-	if !strings.HasPrefix(strings.ToLower(absPath), strings.ToLower(cwd)) {
-		// Allow if it's in the data_dir (which might be outside cwd in dev)
-		absData, _ := filepath.Abs(cacheDir)
-		if !strings.HasPrefix(strings.ToLower(absPath), strings.ToLower(filepath.Dir(absData))) {
-			http.Error(w, "forbidden path", 403)
-			return
-		}
+	absData, _ := filepath.Abs(filepath.Dir(cacheDir))
+	if !isChildPath(cwd, absPath) && !isChildPath(absData, absPath) {
+		http.Error(w, "forbidden path", 403)
+		return
 	}
 
 	f, err := os.Open(absPath)

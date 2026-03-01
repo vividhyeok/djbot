@@ -158,6 +158,14 @@ func sortPlaylist(tracks []TrackAnalysis) []TrackAnalysis {
 	if len(tracks) == 0 {
 		return tracks
 	}
+
+	// Precompute avgEnergy for every track once — avoids O(n² × energy_len)
+	// repeated scans inside the greedy nearest-neighbour loop below.
+	preEnergy := make(map[string]float64, len(tracks))
+	for _, t := range tracks {
+		preEnergy[t.Filepath] = avgEnergy(t)
+	}
+
 	sorted := []TrackAnalysis{tracks[0]}
 	remaining := make([]TrackAnalysis, len(tracks)-1)
 	copy(remaining, tracks[1:])
@@ -181,7 +189,7 @@ func sortPlaylist(tracks []TrackAnalysis) []TrackAnalysis {
 			score += math.Max(0, 20-bpmDiff)
 
 			// ── Phase 3 (C-2): Energy Arc penalty ──
-			tE := avgEnergy(t)
+			tE := preEnergy[t.Filepath]
 			energyPenalty := math.Abs(tE - targetEnergy)
 			// Base score for energy is max 20
 			score += math.Max(0, 20-energyPenalty*20)

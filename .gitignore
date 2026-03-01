@@ -1,9 +1,7 @@
+# Dependencies
 node_modules/
-dist/
-build/
-.env
-.env.local
-.env.*.local
+/dist
+/build
 
 # Tauri / Rust
 src-tauri/target/
@@ -13,16 +11,20 @@ src-tauri/binaries/
 
 # Go Output
 backend/goworker.exe
-backend/goworker-x86_64-pc-windows-msvc.exe
 backend/*.exe
 app/src-tauri/binaries/*.exe
+test_simple_dl.go
+test_ytdlp.go
 
-# App outputs
+# App outputs / Runtime data
 output/
 downloads/
 temp_audio/
+cache/
+uploads/
 *.mp3
 *.lrc
+*.webm
 
 # OS generated files
 .DS_Store
@@ -37,17 +39,15 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
-
-# Tauri full target dir (absolute path variant)
-app/src-tauri/target/
-
-# Runtime data
-cache/
-uploads/
-
-# MSI / installer bundle output
-*.msi
-app/src-tauri/target/release/bundle/
+*.sublime-project
+*.sublime-workspace
 
 # User config
 weights.json
+ai_config.json
+
+# yt-dlp managed binaries
+backend/testdl/
+ytdlp_bin/
+**/yt-dlp.exe
+**/yt-dlp

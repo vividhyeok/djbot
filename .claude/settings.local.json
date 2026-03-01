@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build ./...)",
+      "Bash(cargo check --manifest-path src-tauri/Cargo.toml)",
+      "Bash(yt-dlp -U)",
+      "Bash(yt-dlp --extractor-args \"youtube:player_client=ios\" --simulate --no-warnings \"https://music.youtube.com/playlist?list=PLDIoUOhQQPlXr63I_vwF06Dq80C63CkCl\")"
+    ]
+  }
+}
