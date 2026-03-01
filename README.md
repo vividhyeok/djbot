@@ -1,216 +1,62 @@
 # AutoMix DJ Bot 🎧
 
-> 유튜브 플레이리스트나 내 음악 파일을 **자동으로 DJ 믹스**로 만들어주는 데스크탑 앱
+**AutoMix DJ Bot**은 사용자가 쉽게 유튜브 플레이리스트나 컴퓨터에 있는 음악 파일을 가져와, **자연스럽게 이어지는 완벽한 논스톱(Non-stop) DJ 믹스**를 자동으로 만들어주는 데스크탑 애플리케이션입니다.
+
+"음악을 고르고 버튼만 누르세요. 나머지는 AI가 알아서 해줍니다."
 
 ---
 
-## 이런 분께 딱입니다
+## ✨ 무엇이 특별한가요?
 
-- DJ 소프트웨어를 배우지 않고도 자연스러운 Non-stop 믹스를 만들고 싶은 분
-- 유튜브 뮤직 플레이리스트를 MP3 믹스 파일 하나로 합치고 싶은 분
-- 파티, 운동, 공부용 배경음악 믹스가 필요한 분
+### 🤖 알아서 판단하는 스마트 믹싱
+- **분위기 맞춤형 연결**: 앱이 스스로 모든 곡의 템포(BPM)와 에너지, 그리고 조성(Key)을 분석합니다.
+- **전문가 수준의 조화 (Harmonic Mixing)**: 불협화음이 발생하지 않도록, 서로 가장 잘 어울리는 곡들을 찾아 자연스럽게 배치합니다.
+- **다양한 전환 효과**: 다음 곡으로 넘어갈 때 엇박자가 나지 않게 비트를 맞추고, 곡의 크레센도에 맞춰 크로스페이드(Crossfade), 베이스 스왑(Bass Swap) 등 디제이들이 쓰는 기술을 자동으로 적용합니다.
 
----
+### 🛡️ 골치 아픈 에러 없는 강력한 다운로드
+- **유튜브 완벽 지원**: 원하는 유튜브 뮤직 플레이리스트 링크만 넣으세요. 귀찮게 프로그램을 설치하거나 업데이트할 필요가 없습니다. 앱이 항상 알아서 최신 다운로드 모듈을 유지합니다.
+- **스마트 봇 감지 우회**: 가끔 유튜브가 봇으로 판단하여 일반적인 다운로드를 막는 경우가 있습니다. 이럴 때 AutoMix DJ Bot은 당황하지 않고, 사용자의 PC에 설치된 '크롬, 엣지, 파이어폭스' 브라우저의 접속 정보를 잠깐 빌려와 막힌 길을 즉시 뚫어냅니다. 여러분은 로그인 에러창을 볼 일이 거의 없습니다.
 
-## 주요 기능
-
-| 기능 | 설명 |
-|------|------|
-| **스마트 음악 분석** | BPM(템포), Key(조성), Energy(에너지)를 자동 분석 |
-| **하모닉 믹싱** | Camelot Wheel 기반으로 음악적으로 어울리는 순서로 곡을 배치 |
-| **자동 전환 효과** | Crossfade, Bass Swap, Filter Fade 중 곡 특성에 맞는 방식을 자동 선택 |
-| **yt-dlp 자가 관리** | yt-dlp가 없으면 자동으로 다운로드, 이후 항상 최신 버전으로 유지 |
-| **멀티 플랫폼** | Windows / macOS / Linux 모두 지원 |
+### 🎤 가사(Lyrics) 동기화 지원
+- 믹스가 완료되면 긴 음악 파일 분할 없이도, 언제 어떤 곡이 흘러나오는지 알 수 있도록 시간에 맞춰 정렬된 **가사 및 트랙 타임라인 파일(.lrc)**을 함께 제공합니다.
 
 ---
 
-## 시작하기
+## 🚀 아주 쉬운 사용법
 
-### 1단계 — ffmpeg 설치 (필수)
+### 1단계: 필수 프로그램 준비
+오디오 믹싱을 위해 단 하나의 필수 프로그램(`ffmpeg`)만 PC에 설치되어 있으면 됩니다.
+- **Windows**: 시작 메뉴에서 `cmd`를 열고 `winget install Gyan.FFmpeg`를 입력한 뒤 엔터를 치세요.
+- **macOS**: 터미널을 열고 `brew install ffmpeg`를 입력하세요.
 
-앱이 오디오 분석과 믹싱에 ffmpeg를 사용합니다.
-**없으면 앱이 동작하지 않으니 반드시 먼저 설치해 주세요.**
+### 2단계: 앱 설치 및 실행
+1. [다운로드 페이지](https://github.com/vividhyeok/djbot/releases/latest)에서 본인의 컴퓨터(Windows 또는 Mac)에 맞는 설치 파일을 받아 설치합니다.
+2. 앱을 실행합니다. (최초 실행 시 다운로드 엔진을 스스로 세팅하느라 1분 정도 걸릴 수 있습니다.)
 
-<details>
-<summary>Windows</summary>
-
-**방법 A (권장) — winget 사용:**
-```
-winget install Gyan.FFmpeg
-```
-
-**방법 B — 수동 설치:**
-1. https://ffmpeg.org/download.html 에서 Windows 빌드 다운로드
-2. 압축 해제 후 `ffmpeg.exe`가 있는 `bin` 폴더를 환경변수 PATH에 추가
-3. 터미널에서 `ffmpeg -version`으로 확인
-
-**방법 C — Chocolatey 사용:**
-```
-choco install ffmpeg
-```
-
-**방법 D — Scoop 사용:**
-```
-scoop install ffmpeg
-```
-</details>
-
-<details>
-<summary>macOS</summary>
-
-**Homebrew 사용 (권장):**
-```bash
-brew install ffmpeg
-```
-
-Homebrew가 없다면: https://brew.sh
-</details>
-
-<details>
-<summary>Linux (Ubuntu / Debian 계열)</summary>
-
-```bash
-sudo apt update && sudo apt install ffmpeg
-```
-
-Fedora / RHEL:
-```bash
-sudo dnf install ffmpeg
-```
-</details>
+### 3단계: 음악 믹스 만들기
+1. **음악 넣기**: 
+   - **유튜브 링크**: 상단 창에 유튜브 뮤직 플레이리스트 주소를 붙여넣고 `Download`를 누릅니다.
+   - **내 파일**: 컴퓨터에 있는 MP3나 WAV 파일을 앱 화면 안으로 끌어다 놓습니다.
+2. **믹스 시작**: 화면에 곡 목록이 보이면, 맨 아래 넓은 **[Smart Mix]** 버튼을 누르세요.
+3. **완성**: 바텐더가 음료를 섞듯 앱이 잠시 연산을 마친 뒤, 결과물 폴더를 보여줍니다!
 
 ---
 
-### 2단계 — 앱 다운로드 및 설치
+## 📁 결과물은 어디에 저장되나요?
 
-[GitHub Releases](https://github.com/vividhyeok/djbot/releases/latest)에서 내 운영체제에 맞는 파일을 받습니다.
+믹스가 완료된 파일은 언제든 다시 찾기 쉽게 아래 폴더에 저장됩니다.
 
-| 운영체제 | 파일 |
-|---------|------|
-| Windows | `AutoMix-DJ-Bot_x.x.x_x64-setup.exe` |
-| macOS (Apple Silicon M1/M2/M3) | `AutoMix-DJ-Bot_x.x.x_aarch64.dmg` |
-| macOS (Intel) | `AutoMix-DJ-Bot_x.x.x_x64.dmg` |
-| Linux | `AutoMix-DJ-Bot_x.x.x_amd64.AppImage` |
+- **Windows**: 문서 또는 앱 데이터 공간 (앱 내에서 "폴더 열기" 버튼 제공)
+- **macOS**: `~/Library/Application Support/com.djbot.automix/output/`
 
-> **yt-dlp는 별도 설치가 필요 없습니다.** 앱 최초 실행 시 자동으로 다운로드됩니다.
+저장되는 파일은 두 가지입니다:
+1. `mix_YYYYMMDD_HHMMSS.mp3` : 끊기지 않고 1시간 넘게 재생 가능한 하나의 믹스된 음원
+2. `mix_YYYYMMDD_HHMMSS.lrc` : 음악 플레이어에 넣으면 지금 나오는 곡의 라인업과 가사를 띄워주는 파일
 
 ---
 
-### 3단계 — 앱 사용법
+## 💡 유의사항
+- 이 앱은 개인적인 파티, 운동, 집중 시간 등을 위한 배경음악 믹스를 만들기 위해 제작되었습니다.
+- 유튜브를 통해 다운로드한 콘텐츠는 유튜브의 서비스 약관을 존중하며, 비상업적·개인 소장 용도로만 사용해 주세요.
 
-#### 유튜브 플레이리스트로 믹스 만들기
-
-1. 앱을 실행하고 상단 입력창에 **유튜브 뮤직 플레이리스트 URL**을 붙여넣습니다
-2. `Download` 버튼을 누르거나 Enter를 칩니다
-   → 곡들이 자동으로 다운로드됩니다 (최대 30곡)
-3. 다운로드가 완료되면 곡 목록이 나타납니다
-4. 하단의 **Smart Mix** 버튼을 누릅니다
-5. 잠시 기다리면 믹스 파일이 완성됩니다
-
-#### 내 파일로 믹스 만들기
-
-1. MP3 / WAV 파일을 앱 화면에 **드래그 앤 드롭**합니다
-2. **Smart Mix** 버튼을 누릅니다
-
-#### 결과물 확인
-
-완성된 파일은 앱 데이터 폴더의 `output/` 에 저장됩니다:
-
-| 파일 | 설명 |
-|------|------|
-| `mix_YYYYMMDD_HHMMSS.mp3` | 믹스된 음악 파일 |
-| `mix_YYYYMMDD_HHMMSS.lrc` | 가사/트랙 타임라인 (LRC 형식) |
-
----
-
-## 자주 묻는 질문 (FAQ)
-
-### Q. "yt-dlp가 다운로드 중입니다. 잠시 후 다시 시도해 주세요"라는 메시지가 떠요
-
-최초 실행 시 yt-dlp를 자동으로 다운로드합니다.
-1~2분 기다린 뒤 다시 Download를 눌러 주세요.
-
-### Q. 유튜브 다운로드가 403 Forbidden 오류로 실패해요
-
-앱이 자동으로 Chrome → Edge → Firefox 쿠키를 순서대로 시도합니다.
-- 브라우저에서 유튜브에 로그인한 상태라면 보통 해결됩니다
-- 앱을 껐다가 다시 시작하면 yt-dlp 자동 업데이트가 실행되어 해결되는 경우도 많습니다
-
-### Q. "ffmpeg not found" 오류가 나요
-
-위의 [ffmpeg 설치](#1단계--ffmpeg-설치-필수) 방법대로 설치해 주세요.
-설치 후 앱을 재시작하면 자동으로 인식합니다.
-
-### Q. macOS에서 앱이 실행되지 않아요 ("손상되었습니다" 메시지)
-
-터미널에서 다음 명령을 실행하세요:
-```bash
-xattr -cr "/Applications/AutoMix DJ Bot.app"
-```
-
-### Q. 믹스 파일이 어디에 저장되나요?
-
-| 운영체제 | 저장 위치 |
-|---------|---------|
-| Windows | `C:\Users\<이름>\AppData\Roaming\com.djbot.automix\output\` |
-| macOS | `~/Library/Application Support/com.djbot.automix/output/` |
-| Linux | `~/.local/share/com.djbot.automix/output/` |
-
----
-
-## 개발자용: 소스에서 빌드하기
-
-### 필요 도구
-
-- [Go 1.22+](https://go.dev)
-- [Rust (stable)](https://rustup.rs)
-- [Node.js 20+](https://nodejs.org)
-- [ffmpeg](https://ffmpeg.org)
-
-### Windows에서 빌드
-
-```powershell
-# 개발 모드 (hot-reload)
-.\scripts\build.ps1
-
-# 배포용 인스톨러 빌드
-.\scripts\build.ps1 -Release
-```
-
-### macOS / Linux에서 빌드
-
-```bash
-# Go 백엔드 빌드
-cd backend
-go build -o ../app/src-tauri/binaries/goworker-$(rustc -vV | grep host | cut -d' ' -f2) .
-
-# Tauri 앱 실행 (개발 모드)
-cd ../app
-npm install
-npm run tauri dev
-
-# 배포용 빌드
-npm run tauri build
-```
-
----
-
-## 기술 스택
-
-- **Frontend**: Tauri v2, Vanilla JavaScript, CSS3 (Glassmorphism UI)
-- **Backend**: Go 1.22 (HTTP API server, 오디오 분석 엔진)
-- **오디오 처리**: FFmpeg (디코딩, 인코딩), 커스텀 PCM 믹서 (Go)
-- **빌드/배포**: GitHub Actions (크로스 플랫폼 자동 빌드)
-- **유튜브 다운로드**: yt-dlp (자동 관리, 자동 업데이트)
-
----
-
-## 주의사항 및 라이선스
-
-- 이 도구는 개인적 용도의 음악 믹싱을 위해 만들어졌습니다
-- 유튜브 콘텐츠 다운로드 시 해당 콘텐츠의 저작권 및 유튜브 이용약관을 준수하시기 바랍니다
-- 개인 소장 또는 비상업적 용도로만 사용하세요
-
----
-
-Created by [vividhyeok](https://github.com/vividhyeok)
+즐거운 음악 감상 되세요! 🎧
