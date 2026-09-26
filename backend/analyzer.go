@@ -111,6 +111,9 @@ func loadCachedAnalysis(cachePath string) (*TrackAnalysis, error) {
 	if err := json.Unmarshal(data, &ta); err != nil {
 		return nil, err
 	}
+	if ta.Version != AnalysisVersion {
+		return nil, fmt.Errorf("analysis cache version %d is stale", ta.Version)
+	}
 	return &ta, nil
 }
 
@@ -136,7 +139,7 @@ func AnalyzeTrack(path, cacheDir string) (*TrackAnalysis, error) {
 		return nil, fmt.Errorf("hash: %w", err)
 	}
 
-	cachePath := filepath.Join(cacheDir, hash+"_analysis.json")
+	cachePath := filepath.Join(cacheDir, fmt.Sprintf("%s_analysis_v%d.json", hash, AnalysisVersion))
 	if cached, err := loadCachedAnalysis(cachePath); err == nil {
 		log.Printf("[cache hit] %s", path)
 		return cached, nil
@@ -157,32 +160,39 @@ func AnalyzeTrack(path, cacheDir string) (*TrackAnalysis, error) {
 	onset := computeOnsetEnvelope(samples, sr, frameSize, hopSize)
 
 	bpm := estimateBPM(onset, sr, hopSize)
-	beatTimes := estimateBeatTimes(onset, sr, duration, bpm, hopSize)
+	bpmConfidence := tempoConfidence(onset, sr, hopSize, bpm)
+	beatTimes := trackBeats(onset, sr, duration, bpm, hopSize)
 	energy := computeBeatEnergy(samples, sr, beatTimes)
-	key := detectKey(samples, sr)
-
-	// Phrases: every 32 beats
-	gridSize := 32
-	var phrases []float64
-	for i := 0; i < len(beatTimes); i += gridSize {
-		phrases = append(phrases, beatTimes[i])
+	key, keyConfidence := keyWithConfidence(samples, sr)
+	downbeats := detectDownbeats(beatTimes, energy)
+	phrases := detectPhraseBoundaries(beatTimes, downbeats, energy, onset, sr, hopSize, duration)
+	segments := classifySections(phrases, energy, beatTimes, duration)
+	highlights := detectHighlights(beatTimes, energy)
+	// A compact onset curve is enough for UI/debugging and keeps cache files small.
+	onsetCompact := make([]float64, 0, len(onset)/8+1)
+	for i := 0; i < len(onset); i += 8 {
+		onsetCompact = append(onsetCompact, onset[i])
 	}
 
-	segments := classifySegments(phrases, energy, beatTimes, duration, gridSize)
-	highlights := detectHighlights(beatTimes, energy)
-
 	ta := &TrackAnalysis{
-		Filepath:   path,
-		Hash:       hash,
-		Duration:   math.Round(duration*100) / 100,
-		BPM:        bpm,
-		LoudnessDB: math.Round(loudness*10) / 10,
-		Key:        key,
-		BeatTimes:  beatTimes,
-		Phrases:    phrases,
-		Segments:   segments,
-		Energy:     energy,
-		Highlights: highlights,
+		Version:       AnalysisVersion,
+		Filepath:      path,
+		Hash:          hash,
+		Duration:      math.Round(duration*100) / 100,
+		BPM:           bpm,
+		BPMConfidence: math.Round(bpmConfidence*1000) / 1000,
+		LoudnessDB:    math.Round(loudness*10) / 10,
+		Key:           key,
+		KeyConfidence: math.Round(keyConfidence*1000) / 1000,
+		BeatTimes:     beatTimes,
+		Downbeats:     downbeats,
+		Phrases:       phrases,
+		Segments:      segments,
+		Energy:        energy,
+		Onset:         onsetCompact,
+		Spectral:      spectralSummary(samples, sr, beatTimes),
+		Waveform:      extractWaveform(samples, 1000),
+		Highlights:    highlights,
 	}
 
 	saveCachedAnalysis(cachePath, ta)

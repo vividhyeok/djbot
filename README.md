@@ -1,62 +1,81 @@
-# AutoMix DJ Bot 🎧
+# DJBOT
 
-**AutoMix DJ Bot**은 사용자가 쉽게 유튜브 플레이리스트나 컴퓨터에 있는 음악 파일을 가져와, **자연스럽게 이어지는 완벽한 논스톱(Non-stop) DJ 믹스**를 자동으로 만들어주는 데스크탑 애플리케이션입니다.
+DJBOT은 플레이리스트를 분석해 의도적으로 구성된 DJ mix 초안을 만드는 Windows 데스크톱 앱입니다. 반복적인 beat/phrase 정렬과 후보 탐색은 알고리즘이 맡고, 사용자는 마음에 들지 않는 전환만 고칩니다.
 
-"음악을 고르고 버튼만 누르세요. 나머지는 AI가 알아서 해줍니다."
+## 기본 workflow
 
----
+1. YouTube playlist URL 또는 로컬 음악 파일을 가져옵니다.
+2. **분석**에서 BPM, key, beat/downbeat, phrase, section, energy, loudness, spectral 특징을 추출합니다.
+3. 스타일과 탐색 깊이를 선택하고 **Auto Mix**를 누릅니다.
+4. Visual Timeline에서 바로 구조를 확인하고 전환별 추천 대안을 미리 듣습니다.
+5. 필요한 cue, 길이, transition type만 수정한 뒤 MP3 또는 WAV로 내보냅니다.
 
-## ✨ 무엇이 특별한가요?
+분석 결과와 preview는 캐시됩니다. 원본 오디오는 변경하지 않으며 `.djbot` 프로젝트에는 source reference, clip, transition, automation, mix setting만 저장합니다.
 
-### 🤖 알아서 판단하는 스마트 믹싱
-- **분위기 맞춤형 연결**: 앱이 스스로 모든 곡의 템포(BPM)와 에너지, 그리고 조성(Key)을 분석합니다.
-- **전문가 수준의 조화 (Harmonic Mixing)**: 불협화음이 발생하지 않도록, 서로 가장 잘 어울리는 곡들을 찾아 자연스럽게 배치합니다.
-- **다양한 전환 효과**: 다음 곡으로 넘어갈 때 엇박자가 나지 않게 비트를 맞추고, 곡의 크레센도에 맞춰 크로스페이드(Crossfade), 베이스 스왑(Bass Swap) 등 디제이들이 쓰는 기술을 자동으로 적용합니다.
+## 주요 기능
 
-### 🛡️ 골치 아픈 에러 없는 강력한 다운로드
-- **유튜브 완벽 지원**: 원하는 유튜브 뮤직 플레이리스트 링크만 넣으세요. 귀찮게 프로그램을 설치하거나 업데이트할 필요가 없습니다. 앱이 항상 알아서 최신 다운로드 모듈을 유지합니다.
-- **스마트 봇 감지 우회**: 가끔 유튜브가 봇으로 판단하여 일반적인 다운로드를 막는 경우가 있습니다. 이럴 때 AutoMix DJ Bot은 당황하지 않고, 사용자의 PC에 설치된 '크롬, 엣지, 파이어폭스' 브라우저의 접속 정보를 잠깐 빌려와 막힌 길을 즉시 뚫어냅니다. 여러분은 로그인 에러창을 볼 일이 거의 없습니다.
+- 순수 Go Analyzer V2: Python/pip 불필요, 병렬 분석과 버전별 cache
+- BPM/key confidence, onset-following beat grid, downbeat, novelty 기반 phrase/section
+- Crossfade, Bass Swap, Filter Fade, Echo Out, Cut, Drop, Long Blend, Mashup
+- Quick / Balanced / Deep / Max 다단계 metadata search
+- beat, downbeat, phrase, harmony, BPM, tempo, energy, loudness, spectral/vocal collision 점수
+- Auto, Smooth, Hype, Club, Chill, Journey set energy direction
+- waveform timeline, Beat/Bar/Phrase snap, transition alternatives, undo/redo
+- 전환 구간 빠른 preview와 별도 고품질 final render
+- MP3 320 kbps, WAV 24-bit export
+- future stem/generated material을 고려한 `AudioMaterial` / `TimelineClip` 모델
 
-### 🎤 가사(Lyrics) 동기화 지원
-- 믹스가 완료되면 긴 음악 파일 분할 없이도, 언제 어떤 곡이 흘러나오는지 알 수 있도록 시간에 맞춰 정렬된 **가사 및 트랙 타임라인 파일(.lrc)**을 함께 제공합니다.
+## 설치
 
----
+[GitHub Releases](https://github.com/vividhyeok/djbot/releases)에서 최신 `DJBOT-vX.Y.Z-Windows-x64-Setup.exe`를 내려받아 실행합니다. Portable ZIP도 함께 제공됩니다. 릴리스에는 Go worker, FFmpeg, yt-dlp가 포함되므로 Python, pip, Node, Go 또는 별도 FFmpeg 설치가 필요 없습니다.
 
-## 🚀 아주 쉬운 사용법
+YouTube 서비스 측 변경으로 다운로드가 일시적으로 실패할 수 있습니다. DJBOT은 번들된 yt-dlp를 백그라운드에서 업데이트할 수 있습니다. 저작권과 서비스 약관을 준수해 본인이 사용할 권리가 있는 오디오만 가져오세요.
 
-### 1단계: 필수 프로그램 준비
-오디오 믹싱을 위해 단 하나의 필수 프로그램(`ffmpeg`)만 PC에 설치되어 있으면 됩니다.
-- **Windows**: 시작 메뉴에서 `cmd`를 열고 `winget install Gyan.FFmpeg`를 입력한 뒤 엔터를 치세요.
-- **macOS**: 터미널을 열고 `brew install ffmpeg`를 입력하세요.
+## 개발
 
-### 2단계: 앱 설치 및 실행
-1. [다운로드 페이지](https://github.com/vividhyeok/djbot/releases/latest)에서 본인의 컴퓨터(Windows 또는 Mac)에 맞는 설치 파일을 받아 설치합니다.
-2. 앱을 실행합니다. (최초 실행 시 다운로드 엔진을 스스로 세팅하느라 1분 정도 걸릴 수 있습니다.)
+필요 도구: Go 1.22+, Node 20+, Rust stable, Tauri 2 Windows prerequisites, FFmpeg.
 
-### 3단계: 음악 믹스 만들기
-1. **음악 넣기**: 
-   - **유튜브 링크**: 상단 창에 유튜브 뮤직 플레이리스트 주소를 붙여넣고 `Download`를 누릅니다.
-   - **내 파일**: 컴퓨터에 있는 MP3나 WAV 파일을 앱 화면 안으로 끌어다 놓습니다.
-2. **믹스 시작**: 화면에 곡 목록이 보이면, 맨 아래 넓은 **[Smart Mix]** 버튼을 누르세요.
-3. **완성**: 바텐더가 음료를 섞듯 앱이 잠시 연산을 마친 뒤, 결과물 폴더를 보여줍니다!
+```powershell
+cd backend
+go test ./...
 
----
+cd ..\app
+npm ci
+npm run check
+npm run tauri dev
+```
 
-## 📁 결과물은 어디에 저장되나요?
+로컬 패키징은 `scripts/build.ps1 -Release`로 실행합니다. `app/src-tauri/binaries`에 target triple 이름의 Go sidecar와 `ffmpeg.exe`, `yt-dlp.exe`가 필요합니다. 공식 release workflow가 이를 자동 준비합니다.
 
-믹스가 완료된 파일은 언제든 다시 찾기 쉽게 아래 폴더에 저장됩니다.
+## Architecture
 
-- **Windows**: 문서 또는 앱 데이터 공간 (앱 내에서 "폴더 열기" 버튼 제공)
-- **macOS**: `~/Library/Application Support/com.djbot.automix/output/`
+상세 구조와 데이터 흐름은 [docs/architecture.md](docs/architecture.md)를 참고하세요.
 
-저장되는 파일은 두 가지입니다:
-1. `mix_YYYYMMDD_HHMMSS.mp3` : 끊기지 않고 1시간 넘게 재생 가능한 하나의 믹스된 음원
-2. `mix_YYYYMMDD_HHMMSS.lrc` : 음악 플레이어에 넣으면 지금 나오는 곡의 라인업과 가사를 띄워주는 파일
+- `backend/analysis_v2.go`, `dsp.go`: MIR feature extraction
+- `backend/planner.go`: set ordering, transition candidate generation/scoring/search
+- `backend/renderer.go`: cached transition preview, PCM canvas final rendering
+- `backend/project.go`: versioned non-destructive project persistence
+- `app/src`: desktop timeline/editor UI
+- `app/src-tauri`: worker lifecycle and bundled dependency resolution
 
----
+## Third-party dependencies and licenses
 
-## 💡 유의사항
-- 이 앱은 개인적인 파티, 운동, 집중 시간 등을 위한 배경음악 믹스를 만들기 위해 제작되었습니다.
-- 유튜브를 통해 다운로드한 콘텐츠는 유튜브의 서비스 약관을 존중하며, 비상업적·개인 소장 용도로만 사용해 주세요.
+- [Tauri 2](https://github.com/tauri-apps/tauri): Apache-2.0 / MIT
+- [FFmpeg](https://ffmpeg.org/): release workflow bundles the BtbN **LGPL** Windows build. FFmpeg remains a separate executable invoked as a subprocess. FFmpeg build/license information is available from `ffmpeg -L`.
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp): Unlicense; separate executable.
 
-즐거운 음악 감상 되세요! 🎧
+배포자가 workflow의 FFmpeg URL을 GPL build로 변경하는 경우 해당 GPL 재배포 의무를 별도로 준수해야 합니다. 이 저장소는 사용자에게 Python audio package를 설치하도록 요구하지 않습니다.
+
+## Release
+
+semantic version tag를 push하면 테스트, dependency bundling, Tauri NSIS build, GitHub Release와 asset 첨부가 자동 실행됩니다.
+
+```bash
+git tag v1.5.0
+git push origin v1.5.0
+```
+
+생성 asset:
+
+- `DJBOT-v1.5.0-Windows-x64-Setup.exe`
+- `DJBOT-v1.5.0-Windows-x64-Portable.zip`

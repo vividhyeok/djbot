@@ -1,10 +1,12 @@
 {
   "name": "tauri-app",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.5.0",
   "type": "module",
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "check": "node --check src/app.js",
+    "build": "node --check src/app.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

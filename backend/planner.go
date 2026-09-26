@@ -1,247 +1,423 @@
 package main
 
 import (
+	"fmt"
 	"math"
-	"math/rand"
 	"sort"
+	"strings"
 )
 
-// ComputePlayBounds sets PlayStart / PlayEnd on each TrackEntry.
-// PlayStart: where in the track to start playing from (BInTime from transition).
-// PlayEnd: where in the track to stop playing (always full Duration - we let the
-//
-//	renderer handle overlaps using the xfade duration from the TransitionSpec).
 func ComputePlayBounds(playlist []TrackWithAnalysis, transitions []TransitionSpec) []TrackEntry {
-	n := len(playlist)
-	entries := make([]TrackEntry, n)
+	out := make([]TrackEntry, len(playlist))
 	for i, t := range playlist {
-		entries[i] = TrackEntry{
-			Filepath: t.Analysis.Filepath,
-			Filename: t.Filename,
-			Duration: t.Analysis.Duration,
-			BPM:      t.Analysis.BPM,
+		out[i] = TrackEntry{Filepath: t.Analysis.Filepath, Filename: t.Filename, Duration: t.Analysis.Duration, BPM: t.Analysis.BPM, LoudnessDB: t.Analysis.LoudnessDB, PlayEnd: t.Analysis.Duration}
+		if i > 0 && i-1 < len(transitions) {
+			out[i].PlayStart = clampF(transitions[i-1].BInTime, 0, math.Max(0, t.Analysis.Duration-15))
 		}
 	}
-	if n == 0 {
-		return entries
-	}
-
-	// First track: find a good starting point (intro or first highlight)
-	firstStart := func(ta TrackAnalysis) float64 {
-		dur := ta.Duration
-		beats := ta.BeatTimes
-		anchor := 0.0
-		if len(ta.Highlights) > 0 {
-			anchor = ta.Highlights[0].StartTime
-		} else if len(ta.Segments) > 0 {
-			for _, s := range ta.Segments {
-				if s.Label == "Intro" || s.Label == "Verse" {
-					anchor = s.Time
-					break
-				}
-			}
-		}
-		// Snap to nearest beat
-		if len(beats) > 0 && anchor > 0 {
-			best, bestD := 0, math.Abs(beats[0]-anchor)
-			for i, b := range beats {
-				if d := math.Abs(b - anchor); d < bestD {
-					bestD = d
-					best = i
-				}
-			}
-			anchor = beats[best]
-		}
-		if anchor > dur*0.5 {
-			anchor = 0 // fallback: play from beginning if analysis misidentified
-		}
-		return anchor
-	}
-
-	// First track starts at intro, plays to end
-	entries[0].PlayStart = firstStart(playlist[0].Analysis)
-	entries[0].PlayEnd = playlist[0].Analysis.Duration
-
-	// Middle and last tracks: start at BInTime (where DJ "drops in"), play to end
-	for i := 1; i < n; i++ {
-		if i-1 < len(transitions) {
-			bIn := transitions[i-1].BInTime
-			dur := playlist[i].Analysis.Duration
-			// Clamp: BInTime must be within 0..Duration-15
-			if bIn < 0 {
-				bIn = 0
-			}
-			if bIn > dur-15.0 {
-				bIn = math.Max(0, dur-15.0)
-			}
-			entries[i].PlayStart = bIn
-		} else {
-			entries[i].PlayStart = 0
-		}
-		entries[i].PlayEnd = playlist[i].Analysis.Duration
-	}
-
-	return entries
+	return out
 }
 
-// GenerateMixPlan takes analyzed tracks and produces a full mix plan
-// (transition candidates + best selections), mirroring app.py SMART MIX logic.
-func GenerateMixPlan(tracks []TrackAnalysis, typeWeights map[string]float64, barWeights map[int]float64, numScenarios int) MixPlan {
+func defaultSettings(s MixSettings) MixSettings {
+	if s.Style == "" {
+		s.Style = "auto"
+	}
+	if s.SearchDepth == "" {
+		s.SearchDepth = "balanced"
+	}
+	return s
+}
+func searchBudget(depth string) (int, int) {
+	switch strings.ToLower(depth) {
+	case "quick":
+		return 12, 4
+	case "deep":
+		return 96, 10
+	case "max":
+		return 256, 16
+	default:
+		return 40, 7
+	}
+}
+
+// GenerateMixPlan remains source-compatible with the original API.
+func GenerateMixPlan(tracks []TrackAnalysis, typeW map[string]float64, barW map[int]float64, scenarios int) MixPlan {
+	depth := "balanced"
+	if scenarios <= 8 {
+		depth = "quick"
+	} else if scenarios >= 100 {
+		depth = "deep"
+	}
+	return GenerateMixPlanV2(tracks, typeW, barW, MixSettings{Style: "auto", SearchDepth: depth})
+}
+
+// GenerateMixPlanV2 performs a cheap beam search for set order, then exhaustive
+// metadata scoring per adjacent pair. No audio is rendered during search.
+func GenerateMixPlanV2(tracks []TrackAnalysis, typeW map[string]float64, barW map[int]float64, settings MixSettings) MixPlan {
+	settings = defaultSettings(settings)
 	if len(tracks) < 2 {
-		return MixPlan{}
+		return MixPlan{Settings: settings}
 	}
-
-	// Sort by harmonic/energy flow (greedy nearest-neighbour)
-	sorted := sortPlaylist(tracks)
-
-	// Default weights
-	if typeWeights == nil {
-		typeWeights = map[string]float64{
-			"crossfade":   0.5,
-			"bass_swap":   1.6,
-			"cut":         1.2,
-			"filter_fade": 1.0,
-			"mashup":      1.0,
-		}
+	perPair, beam := searchBudget(settings.SearchDepth)
+	ordered := tracks
+	if !settings.PreserveOrder {
+		ordered = beamOrder(tracks, settings, beam)
 	}
-	if barWeights == nil {
-		barWeights = map[int]float64{4: 1.0, 8: 1.3}
-	}
-
-	bestScore := math.Inf(-1)
-	var bestSelections []TransitionSpec
-	var bestCandidates [][]TransitionSpec
-
-	if numScenarios <= 0 {
-		numScenarios = 5
-	}
-
-	for s := 0; s < numScenarios; s++ {
-		scenarioScore := 0.0
-		var scenarioCands [][]TransitionSpec
-		var scenarioSels []TransitionSpec
-		minExitTime := 0.0
-
-		for i := 0; i < len(sorted)-1; i++ {
-			cands := generateCandidates(sorted[i], sorted[i+1], typeWeights, barWeights, 8)
-			best := selectBest(cands, typeWeights, barWeights, minExitTime)
-			if best != nil {
-				scenarioScore += typeWeights[best.Type]
-				scenarioSels = append(scenarioSels, *best)
-				minExitTime = best.BInTime
+	all := make([][]TransitionSpec, 0, len(ordered)-1)
+	alts := make([][]TransitionSpec, 0, len(ordered)-1)
+	sels := make([]TransitionSpec, 0, len(ordered)-1)
+	evaluated := 0
+	for i := 0; i < len(ordered)-1; i++ {
+		cs := generateTransitionCandidates(ordered[i], ordered[i+1], typeW, barW, perPair)
+		evaluated += len(cs)
+		sort.SliceStable(cs, func(a, b int) bool { return cs[a].Score.Total > cs[b].Score.Total })
+		all = append(all, cs)
+		if len(cs) > 0 {
+			sels = append(sels, cs[0])
+			n := 3
+			if len(cs) < n {
+				n = len(cs)
 			}
-			scenarioCands = append(scenarioCands, cands)
-		}
-
-		if scenarioScore > bestScore {
-			bestScore = scenarioScore
-			bestSelections = scenarioSels
-			bestCandidates = scenarioCands
+			alts = append(alts, append([]TransitionSpec(nil), cs[:n]...))
 		}
 	}
-
-	return MixPlan{
-		SortedTracks: sorted,
-		Candidates:   bestCandidates,
-		Selections:   bestSelections,
-	}
+	setScore := aggregateSetScore(ordered, sels, settings)
+	return MixPlan{SortedTracks: ordered, Candidates: all, Selections: sels, Alternatives: alts, Score: setScore, Evaluated: evaluated, Settings: settings}
 }
 
-// --- Internal helpers ---
-
-func idealEnergy(position float64) float64 {
-	// Bell curve: 0 -> 0.7 rising, 0.7 -> 1.0 falling
-	return math.Sin(position*math.Pi*0.9)*0.6 + 0.4
+type orderState struct {
+	seq   []int
+	used  map[int]bool
+	score float64
 }
 
-func sortPlaylist(tracks []TrackAnalysis) []TrackAnalysis {
-	if len(tracks) == 0 {
-		return tracks
+func beamOrder(tracks []TrackAnalysis, s MixSettings, width int) []TrackAnalysis {
+	states := []orderState{}
+	for i := range tracks {
+		states = append(states, orderState{[]int{i}, map[int]bool{i: true}, 0})
 	}
-
-	// Precompute avgEnergy for every track once — avoids O(n² × energy_len)
-	// repeated scans inside the greedy nearest-neighbour loop below.
-	preEnergy := make(map[string]float64, len(tracks))
-	for _, t := range tracks {
-		preEnergy[t.Filepath] = avgEnergy(t)
+	for len(states[0].seq) < len(tracks) {
+		var next []orderState
+		for _, st := range states {
+			last := st.seq[len(st.seq)-1]
+			for j := range tracks {
+				if st.used[j] {
+					continue
+				}
+				u := make(map[int]bool, len(st.used)+1)
+				for k, v := range st.used {
+					u[k] = v
+				}
+				u[j] = true
+				pos := float64(len(st.seq)) / float64(len(tracks)-1)
+				score := st.score + pairOrderScore(tracks[last], tracks[j], targetEnergy(s.Style, pos))
+				next = append(next, orderState{append(append([]int(nil), st.seq...), j), u, score})
+			}
+		}
+		sort.Slice(next, func(i, j int) bool { return next[i].score > next[j].score })
+		if len(next) > width {
+			next = next[:width]
+		}
+		states = next
 	}
+	out := make([]TrackAnalysis, len(tracks))
+	for i, x := range states[0].seq {
+		out[i] = tracks[x]
+	}
+	return out
+}
+func targetEnergy(style string, p float64) float64 {
+	switch strings.ToLower(style) {
+	case "hype":
+		return .55 + .4*p
+	case "chill":
+		return .45 + .1*math.Sin(p*math.Pi)
+	case "club":
+		return .55 + .35*math.Sin(p*math.Pi*.85)
+	case "smooth":
+		return .5 + .2*p
+	case "journey":
+		return .4 + .5*math.Sin(p*math.Pi)
+	default:
+		return .45 + .45*math.Sin(p*math.Pi*.9)
+	}
+}
+func pairOrderScore(a, b TrackAnalysis, target float64) float64 {
+	return harmonyScore(a.Key, b.Key)*.35 + bpmScore(a.BPM, b.BPM)*.2 + (100-math.Abs(avgEnergy(b)-target)*100)*.35 + energyContinuity(a, b)*.1
+}
 
-	sorted := []TrackAnalysis{tracks[0]}
-	remaining := make([]TrackAnalysis, len(tracks)-1)
-	copy(remaining, tracks[1:])
-
-	for len(remaining) > 0 {
-		current := sorted[len(sorted)-1]
-		bestIdx := 0
-		bestScore := math.Inf(-1)
-
-		// ── Phase 3 (C-2): Energy Arc position calculation ──
-		position := float64(len(sorted)) / float64(len(tracks))
-		targetEnergy := idealEnergy(position)
-
-		for i, t := range remaining {
-			score := 0.0
-			keyDist := camelotDistance(current.Key, t.Key)
-			// Perfect match = 0, relative = 10, completely off = 60+ penalty
-			score += math.Max(0, 60-float64(keyDist))
-
-			bpmDiff := math.Abs(t.BPM - current.BPM)
-			score += math.Max(0, 20-bpmDiff)
-
-			// ── Phase 3 (C-2): Energy Arc penalty ──
-			tE := preEnergy[t.Filepath]
-			energyPenalty := math.Abs(tE - targetEnergy)
-			// Base score for energy is max 20
-			score += math.Max(0, 20-energyPenalty*20)
-
-			// ── Phase 3 (C-3): BPM Gradient Bonus ──
-			if len(sorted) >= 2 {
-				prev2BPM := sorted[len(sorted)-2].BPM
-				trend := current.BPM - prev2BPM
-				if trend > 0 && t.BPM > current.BPM {
-					score += 5.0 // bonus for maintaining upward momentum
-				} else if trend < 0 && t.BPM < current.BPM {
-					score += 5.0 // bonus for maintaining downward momentum
+func generateTransitionCandidates(a, b TrackAnalysis, typeW map[string]float64, barW map[int]float64, limit int) []TransitionSpec {
+	types := []string{"crossfade", "bass_swap", "filter_fade", "echo_out", "cut", "drop", "long_blend", "mashup"}
+	bars := []int{4, 8, 16, 32}
+	if len(barW) > 0 {
+		bars = bars[:0]
+		for k := range barW {
+			bars = append(bars, k)
+		}
+		sort.Ints(bars)
+	}
+	exits := anchors(a, false)
+	entries := anchors(b, true)
+	var out []TransitionSpec
+	for _, x := range exits {
+		for _, y := range entries {
+			for _, nbar := range bars {
+				for _, typ := range types {
+					target := weightedTempo(a.BPM, b.BPM)
+					dur := float64(nbar) * 4 * 60 / target
+					if typ == "cut" {
+						dur = math.Min(dur, 4*60/target)
+					}
+					if x+dur > a.Duration || y+dur > b.Duration {
+						continue
+					}
+					spA := clampF(target/a.BPM, .92, 1.08)
+					spB := clampF(target/b.BPM, .92, 1.08)
+					t := TransitionSpec{ID: fmt.Sprintf("%s-%d-%d-%d", typ, int(x*10), int(y*10), nbar), Type: typ, Name: transitionName(typ), Duration: dur, Bars: nbar, AOutTime: x, BInTime: y, TargetBPM: target, SpeedA: spA, SpeedB: spB, PhraseAligned: nearAny(x, a.Phrases, 0.08), DownbeatAligned: nearAny(x, a.Downbeats, 0.08) && nearAny(y, b.Downbeats, 0.08)}
+					t.Automation = defaultAutomation(typ, dur, spA, spB)
+					t.Score = scoreTransition(a, b, t)
+					if w := typeW[typ]; w > 0 {
+						t.Score.Total = clampF(t.Score.Total+(w-1)*2, 0, 100)
+					}
+					out = append(out, t)
 				}
 			}
-
-			if score > bestScore {
-				bestScore = score
-				bestIdx = i
-			}
 		}
-		sorted = append(sorted, remaining[bestIdx])
-		remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)
 	}
-	return sorted
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Score.Total > out[j].Score.Total })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+func anchors(t TrackAnalysis, entry bool) []float64 {
+	src := t.Phrases
+	if len(src) == 0 {
+		src = t.Downbeats
+	}
+	if len(src) == 0 {
+		src = t.BeatTimes
+	}
+	var out []float64
+	for _, x := range src {
+		p := x / t.Duration
+		if entry && p <= .55 {
+			out = append(out, x)
+		} else if !entry && p >= .35 && p <= .94 {
+			out = append(out, x)
+		}
+	}
+	if len(out) == 0 {
+		if entry {
+			return []float64{0}
+		}
+		return []float64{math.Max(0, t.Duration-30)}
+	}
+	if len(out) > 8 {
+		step := len(out) / 8
+		z := []float64{}
+		for i := 0; i < len(out); i += step {
+			z = append(z, out[i])
+		}
+		out = z
+	}
+	return out
+}
+func transitionName(t string) string {
+	return map[string]string{"crossfade": "Smooth Crossfade", "bass_swap": "Bass Swap", "filter_fade": "Filter Fade", "echo_out": "Echo Out", "cut": "Beat Cut", "drop": "Drop Transition", "long_blend": "Long Blend", "mashup": "Mashup Blend"}[t]
+}
+func weightedTempo(a, b float64) float64 {
+	for b > a*1.45 {
+		b /= 2
+	}
+	for a > b*1.45 {
+		a /= 2
+	}
+	return (a + b) / 2
+}
+func nearAny(x float64, v []float64, tol float64) bool {
+	for _, y := range v {
+		if math.Abs(x-y) <= tol {
+			return true
+		}
+	}
+	return false
 }
 
+func defaultAutomation(typ string, dur, sa, sb float64) Automation {
+	a := Automation{VolumeA: []AutomationPoint{{0, 1}, {dur, 0}}, VolumeB: []AutomationPoint{{0, 0}, {dur, 1}}, Tempo: []AutomationPoint{{0, sa}, {dur, sb}}}
+	switch typ {
+	case "bass_swap":
+		a.LowA = []AutomationPoint{{0, 1}, {dur * .5, 1}, {dur * .52, 0}}
+		a.LowB = []AutomationPoint{{0, 0}, {dur * .5, 0}, {dur * .52, 1}}
+	case "filter_fade":
+		a.FilterA = []AutomationPoint{{0, 1}, {dur, 0}}
+		a.FilterB = []AutomationPoint{{0, .2}, {dur, 1}}
+	case "cut":
+		a.VolumeA = []AutomationPoint{{0, 1}, {dur, 1}, {dur, 0}}
+		a.VolumeB = []AutomationPoint{{0, 0}, {dur, 1}}
+	}
+	return a
+}
+
+func scoreTransition(a, b TrackAnalysis, t TransitionSpec) ScoreBreakdown {
+	s := ScoreBreakdown{}
+	s.Beat = alignmentScore(t.AOutTime, a.BeatTimes)
+	s.Downbeat = (alignmentScore(t.AOutTime, a.Downbeats) + alignmentScore(t.BInTime, b.Downbeats)) / 2
+	s.Phrase = (alignmentScore(t.AOutTime, a.Phrases) + alignmentScore(t.BInTime, b.Phrases)) / 2
+	s.Harmony = harmonyScore(a.Key, b.Key)
+	s.BPM = bpmScore(a.BPM, b.BPM)
+	ratio := math.Max(t.SpeedA, 1/t.SpeedA) * math.Max(t.SpeedB, 1/t.SpeedB)
+	s.Tempo = clampF(110-(ratio-1)*180, 0, 100)
+	s.Energy = energyAtScore(a, t.AOutTime, b, t.BInTime)
+	s.Loudness = clampF(100-math.Abs(a.LoudnessDB-b.LoudnessDB)*7, 0, 100)
+	s.Spectral = spectralCompatibility(a, t.AOutTime, b, t.BInTime)
+	s.Vocal = vocalCompatibility(a, t.AOutTime, b, t.BInTime)
+	s.Smoothness = (s.Beat + s.Downbeat + s.Phrase + s.Tempo + s.Loudness) / 5
+	s.Total = .13*s.Beat + .12*s.Downbeat + .15*s.Phrase + .12*s.Harmony + .09*s.BPM + .08*s.Tempo + .11*s.Energy + .07*s.Loudness + .07*s.Spectral + .06*s.Vocal
+	return roundScore(s)
+}
+func alignmentScore(x float64, v []float64) float64 {
+	if len(v) == 0 {
+		return 50
+	}
+	i := nearestIndex(v, x)
+	d := math.Abs(v[i] - x)
+	return clampF(100-d*120, 0, 100)
+}
+func normalizeKey(k string) string {
+	k = strings.ReplaceAll(k, " Major", "")
+	k = strings.ReplaceAll(k, " Minor", "m")
+	return k
+}
+func harmonyScore(a, b string) float64 {
+	d := camelotDistance(normalizeKey(a), normalizeKey(b))
+	return clampF(100-float64(d)*1.7, 0, 100)
+}
+func bpmScore(a, b float64) float64 {
+	if a <= 0 || b <= 0 {
+		return 50
+	}
+	for b > a*1.45 {
+		b /= 2
+	}
+	for a > b*1.45 {
+		a /= 2
+	}
+	return clampF(100-math.Abs(a-b)*5, 0, 100)
+}
+func energyAt(t TrackAnalysis, x float64) float64 {
+	if len(t.Energy) == 0 || len(t.BeatTimes) == 0 {
+		return .5
+	}
+	i := nearestIndex(t.BeatTimes, x)
+	if i >= len(t.Energy) {
+		i = len(t.Energy) - 1
+	}
+	return t.Energy[i]
+}
+func energyAtScore(a TrackAnalysis, x float64, b TrackAnalysis, y float64) float64 {
+	return clampF(100-math.Abs(energyAt(a, x)-energyAt(b, y))*100, 0, 100)
+}
+func energyContinuity(a, b TrackAnalysis) float64 {
+	return clampF(100-math.Abs(avgEnergy(a)-avgEnergy(b))*100, 0, 100)
+}
 func avgEnergy(t TrackAnalysis) float64 {
 	if len(t.Energy) == 0 {
-		return 0.5
+		return .5
 	}
-	sum := 0.0
-	for _, e := range t.Energy {
-		sum += e
+	var s float64
+	for _, x := range t.Energy {
+		s += x
 	}
-	return sum / float64(len(t.Energy))
+	return s / float64(len(t.Energy))
+}
+func nearestSpectral(t TrackAnalysis, x float64) SpectralFeature {
+	if len(t.Spectral) == 0 {
+		return SpectralFeature{BassRatio: .33, MidRatio: .34, HighRatio: .33}
+	}
+	best := 0
+	for i := range t.Spectral {
+		if math.Abs(t.Spectral[i].Time-x) < math.Abs(t.Spectral[best].Time-x) {
+			best = i
+		}
+	}
+	return t.Spectral[best]
+}
+func spectralCompatibility(a TrackAnalysis, x float64, b TrackAnalysis, y float64) float64 {
+	p, q := nearestSpectral(a, x), nearestSpectral(b, y)
+	collision := math.Min(p.BassRatio, q.BassRatio)*.5 + math.Min(p.MidRatio, q.MidRatio)*.35 + math.Min(p.HighRatio, q.HighRatio)*.15
+	return clampF(105-collision*85, 0, 100)
+}
+func segmentAt(t TrackAnalysis, x float64) Segment {
+	for _, s := range t.Segments {
+		if x >= s.Start && x < s.End {
+			return s
+		}
+	}
+	return Segment{VocalEnergy: .5}
+}
+func vocalCompatibility(a TrackAnalysis, x float64, b TrackAnalysis, y float64) float64 {
+	v := segmentAt(a, x).VocalEnergy * segmentAt(b, y).VocalEnergy
+	return clampF(100-v*80, 0, 100)
+}
+func roundScore(s ScoreBreakdown) ScoreBreakdown {
+	p := func(x float64) float64 { return math.Round(x*10) / 10 }
+	s.Total = p(s.Total)
+	s.Beat = p(s.Beat)
+	s.Downbeat = p(s.Downbeat)
+	s.Phrase = p(s.Phrase)
+	s.Harmony = p(s.Harmony)
+	s.BPM = p(s.BPM)
+	s.Tempo = p(s.Tempo)
+	s.Energy = p(s.Energy)
+	s.Loudness = p(s.Loudness)
+	s.Spectral = p(s.Spectral)
+	s.Vocal = p(s.Vocal)
+	s.Smoothness = p(s.Smoothness)
+	return s
+}
+func aggregateSetScore(ts []TrackAnalysis, tr []TransitionSpec, s MixSettings) ScoreBreakdown {
+	var out ScoreBreakdown
+	if len(tr) == 0 {
+		return out
+	}
+	types := map[string]bool{}
+	var arc float64
+	for i, x := range tr {
+		out.Beat += x.Score.Beat
+		out.Downbeat += x.Score.Downbeat
+		out.Phrase += x.Score.Phrase
+		out.Harmony += x.Score.Harmony
+		out.Energy += x.Score.Energy
+		out.Spectral += x.Score.Spectral
+		out.Total += x.Score.Total
+		types[x.Type] = true
+		if i < len(ts) {
+			arc += 100 - math.Abs(avgEnergy(ts[i])-targetEnergy(s.Style, float64(i)/float64(len(ts)-1)))*100
+		}
+	}
+	n := float64(len(tr))
+	out.Beat /= n
+	out.Downbeat /= n
+	out.Phrase /= n
+	out.Harmony /= n
+	out.Energy /= n
+	out.Spectral /= n
+	out.Total /= n
+	out.Diversity = clampF(float64(len(types))/math.Min(n, 4)*100, 0, 100)
+	out.SetArc = clampF(arc/n, 0, 100)
+	out.Total = out.Total*.8 + out.Diversity*.08 + out.SetArc*.12
+	return roundScore(out)
 }
 
 var noteOrder = []string{"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
 
-func noteIndex(key string) int {
-	if len(key) < 1 {
-		return 0
-	}
-	root := key
-	if len(key) > 2 && key[1] == '#' {
-		root = key[:2]
-	} else {
-		root = key[:1]
-		// handle "C#" correctly: check if second char is '#'
-		if len(key) > 1 && key[1] == '#' {
-			root = key[:2]
-		}
+func noteIndex(k string) int {
+	root := strings.TrimSuffix(normalizeKey(k), "m")
+	flats := map[string]string{"Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#"}
+	if x := flats[root]; x != "" {
+		root = x
 	}
 	for i, n := range noteOrder {
 		if n == root {
@@ -250,12 +426,8 @@ func noteIndex(key string) int {
 	}
 	return 0
 }
-
-func keyDistance(k1, k2 string) int {
-	d := noteIndex(k1) - noteIndex(k2)
-	if d < 0 {
-		d = -d
-	}
+func keyDistance(a, b string) int {
+	d := absInt(noteIndex(a) - noteIndex(b))
 	if d > 6 {
 		d = 12 - d
 	}
@@ -265,273 +437,29 @@ func keyDistance(k1, k2 string) int {
 var camelotMap = map[string]struct {
 	num  int
 	mode string
-}{
-	"B": {1, "B"}, "F#": {2, "B"}, "Db": {3, "B"}, "Ab": {4, "B"}, "Eb": {5, "B"}, "Bb": {6, "B"},
-	"F": {7, "B"}, "C": {8, "B"}, "G": {9, "B"}, "D": {10, "B"}, "A": {11, "B"}, "E": {12, "B"},
-	"G#m": {1, "A"}, "D#m": {2, "A"}, "Bbm": {3, "A"}, "Fm": {4, "A"}, "Cm": {5, "A"}, "Gm": {6, "A"},
-	"Dm": {7, "A"}, "Am": {8, "A"}, "Em": {9, "A"}, "Bm": {10, "A"}, "F#m": {11, "A"}, "C#m": {12, "A"},
+}{"B": {1, "B"}, "F#": {2, "B"}, "Db": {3, "B"}, "Ab": {4, "B"}, "Eb": {5, "B"}, "Bb": {6, "B"}, "F": {7, "B"}, "C": {8, "B"}, "G": {9, "B"}, "D": {10, "B"}, "A": {11, "B"}, "E": {12, "B"}, "G#m": {1, "A"}, "D#m": {2, "A"}, "Bbm": {3, "A"}, "Fm": {4, "A"}, "Cm": {5, "A"}, "Gm": {6, "A"}, "Dm": {7, "A"}, "Am": {8, "A"}, "Em": {9, "A"}, "Bm": {10, "A"}, "F#m": {11, "A"}, "C#m": {12, "A"}}
+
+func camelotDistance(a, b string) int {
+	x, ok := camelotMap[a]
+	y, ok2 := camelotMap[b]
+	if !ok || !ok2 {
+		return keyDistance(a, b) * 10
+	}
+	d := absInt(x.num - y.num)
+	if d > 6 {
+		d = 12 - d
+	}
+	if x.mode == y.mode {
+		if d <= 1 {
+			return 0
+		}
+		return (d - 1) * 10
+	}
+	if d == 0 {
+		return 10
+	}
+	return d * 10
 }
-
-func camelotDistance(k1, k2 string) int {
-	c1, ok1 := camelotMap[k1]
-	c2, ok2 := camelotMap[k2]
-	if !ok1 || !ok2 {
-		return keyDistance(k1, k2) * 10 // fallback
-	}
-
-	distNum := c1.num - c2.num
-	if distNum < 0 {
-		distNum = -distNum
-	}
-	if distNum > 6 {
-		distNum = 12 - distNum
-	}
-
-	if c1.mode == c2.mode {
-		if distNum <= 1 {
-			return 0 // perfect harmonic match
-		}
-		return (distNum - 1) * 10
-	} else {
-		// different modes (A vs B)
-		if distNum == 0 {
-			return 10 // relative major/minor
-		}
-		return distNum * 10
-	}
-}
-
-func selectTransitionType(ta, tb TrackAnalysis, typeW map[string]float64) string {
-	energyDiff := avgEnergy(tb) - avgEnergy(ta)
-	keyDist := camelotDistance(ta.Key, tb.Key)
-	bpmDiff := math.Abs(ta.BPM - tb.BPM)
-
-	choices := make(map[string]float64)
-	if val, ok := typeW["crossfade"]; ok {
-		choices["crossfade"] = val
-	} else {
-		choices["crossfade"] = 0.5
-	}
-
-	if keyDist <= 10 && bpmDiff < 5.0 {
-		if val, ok := typeW["mashup"]; ok {
-			choices["mashup"] = val
-		}
-		if val, ok := typeW["bass_swap"]; ok {
-			choices["bass_swap"] = val
-		}
-	} else if energyDiff > 0.2 {
-		if val, ok := typeW["bass_swap"]; ok {
-			choices["bass_swap"] = val
-		}
-	} else if energyDiff < -0.2 {
-		if val, ok := typeW["filter_fade"]; ok {
-			choices["filter_fade"] = val
-		}
-	} else if bpmDiff > 10.0 {
-		if val, ok := typeW["cut"]; ok {
-			choices["cut"] = val
-		}
-	}
-
-	bestType := "crossfade"
-	bestScore := math.Inf(-1)
-	for t, w := range choices {
-		score := w * (0.5 + rand.Float64()) // random variance
-		if score > bestScore {
-			bestScore = score
-			bestType = t
-		}
-	}
-	return bestType
-}
-
-func generateCandidates(ta, tb TrackAnalysis, typeW map[string]float64, barW map[int]float64, count int) []TransitionSpec {
-	bars := weightedIntKeys(barW)
-
-	durA := ta.Duration
-	durB := tb.Duration
-	bpmA := ta.BPM
-	bpmB := tb.BPM
-	targetBPM := (bpmA + bpmB) / 2
-
-	// ed031c0b mixing behavior: ignore targetBPM stretching, keep native speed
-	speedA := 1.0
-	speedB := 1.0
-
-	segsA := ta.Segments
-	segsB := tb.Segments
-	if len(segsA) == 0 {
-		segsA = []Segment{{Time: durA - 30, Label: "Outro", Energy: 0.5}}
-	}
-	if len(segsB) == 0 {
-		segsB = []Segment{{Time: 0, Label: "Intro", Energy: 0.5}}
-	}
-
-	beatTimesA := ta.BeatTimes
-	beatTimesB := tb.BeatTimes
-
-	var cands []TransitionSpec
-	for i := 0; i < count; i++ {
-		// ── Phase 1 (D-1): Auto transition type selection ──
-		tType := selectTransitionType(ta, tb, typeW)
-		pickedBars := bars[rand.Intn(len(bars))]
-
-		var exitSeg Segment
-		var entrySeg Segment
-
-		// ── Phase 3 (E-2): Utilize highlights if available ──
-		if len(ta.Highlights) > 0 && rand.Float64() > 0.3 {
-			bestH := ta.Highlights[0]
-			for _, h := range ta.Highlights {
-				if h.Score > bestH.Score {
-					bestH = h
-				}
-			}
-			exitSeg = Segment{Time: bestH.EndTime, Label: "Highlight"}
-		} else {
-			exitSeg = pickSegment(segsA, []string{"Chorus", "Verse", "Bridge", "Outro"})
-		}
-
-		if len(tb.Highlights) > 0 && rand.Float64() > 0.3 {
-			bestH := tb.Highlights[0]
-			for _, h := range tb.Highlights {
-				if h.Score > bestH.Score {
-					bestH = h
-				}
-			}
-			entrySeg = Segment{Time: bestH.StartTime, Label: "Highlight"}
-		} else {
-			entrySeg = pickSegment(segsB, []string{"Intro", "Verse", "Chorus", "Bridge"})
-		}
-
-		// Avoid boring Outro->Intro
-		for exitSeg.Label == "Outro" && entrySeg.Label == "Intro" && rand.Float64() > 0.05 {
-			exitSeg = pickSegment(segsA, []string{"Chorus", "Verse", "Bridge", "Outro"})
-			entrySeg = pickSegment(segsB, []string{"Intro", "Verse", "Chorus", "Bridge"})
-		}
-
-		aOut := snapToPhrase(exitSeg.Time+20, ta.Phrases, beatTimesA, 16)
-		bIn := snapToPhrase(entrySeg.Time, tb.Phrases, beatTimesB, 16)
-
-		beatDur := 60.0 / targetBPM
-		dur := float64(pickedBars) * 4 * beatDur
-
-		cands = append(cands, TransitionSpec{
-			Type:     tType,
-			Name:     tType + " | " + exitSeg.Label + "->" + entrySeg.Label,
-			Duration: dur,
-			AOutTime: clampF(aOut, 0, durA),
-			BInTime:  clampF(bIn, 0, durB),
-			SpeedA:   speedA,
-			SpeedB:   speedB,
-		})
-	}
-	return cands
-}
-
-func selectBest(cands []TransitionSpec, typeW map[string]float64, barW map[int]float64, minExit float64) *TransitionSpec {
-	if len(cands) == 0 {
-		return nil
-	}
-	type scored struct {
-		s float64
-		c TransitionSpec
-	}
-	var list []scored
-	for _, c := range cands {
-		w := typeW[c.Type]
-		if w == 0 {
-			w = 1.0
-		}
-		penalty := 0.0
-		if c.AOutTime < minExit+4 {
-			penalty = -500
-		}
-		score := w + penalty + rand.Float64()*0.01
-		list = append(list, scored{score, c})
-	}
-	sort.Slice(list, func(i, j int) bool { return list[i].s > list[j].s })
-	best := list[0].c
-	return &best
-}
-
-func pickSegment(segs []Segment, labels []string) Segment {
-	var pool []Segment
-	for _, s := range segs {
-		// ── Phase 2 (B-3): Avoid heavy vocals during entry/exit ──
-		if s.VocalEnergy > 0.6 {
-			continue // heavy vocal, might clash
-		}
-		for _, l := range labels {
-			if s.Label == l {
-				pool = append(pool, s)
-				break
-			}
-		}
-	}
-	// Fallback if all were rejected
-	if len(pool) == 0 {
-		for _, s := range segs {
-			for _, l := range labels {
-				if s.Label == l {
-					pool = append(pool, s)
-					break
-				}
-			}
-		}
-	}
-
-	if len(pool) == 0 && len(segs) > 0 {
-		return segs[rand.Intn(len(segs))]
-	}
-	if len(pool) == 0 {
-		return Segment{Time: 0, Label: "Verse", Energy: 0.5}
-	}
-	return pool[rand.Intn(len(pool))]
-}
-
-func snapToPhrase(timeSec float64, phrases []float64, beats []float64, grid int) float64 {
-	if len(phrases) > 0 {
-		best, bestD := phrases[0], math.Abs(phrases[0]-timeSec)
-		for _, p := range phrases[1:] {
-			if d := math.Abs(p - timeSec); d < bestD {
-				bestD = d
-				best = p
-			}
-		}
-		// Snapping is acceptable if the closest phrase boundary is within ~15 seconds.
-		if bestD < 15.0 {
-			return best
-		}
-	}
-	return snapGrid(timeSec, beats, grid)
-}
-
-func snapGrid(timeSec float64, beats []float64, grid int) float64 {
-	if len(beats) == 0 {
-		return timeSec
-	}
-	best, bestD := 0, math.Abs(beats[0]-timeSec)
-	for i, b := range beats {
-		if d := math.Abs(b - timeSec); d < bestD {
-			bestD = d
-			best = i
-		}
-	}
-	snapped := int(math.Round(float64(best)/float64(grid))) * grid
-	if snapped >= len(beats) {
-		snapped = (len(beats) - 1) / grid * grid
-	}
-	if snapped < 0 {
-		snapped = 0
-	}
-	if snapped >= len(beats) {
-		snapped = len(beats) - 1
-	}
-	return beats[snapped]
-}
-
 func clampF(v, lo, hi float64) float64 {
 	if v < lo {
 		return lo
@@ -540,38 +468,4 @@ func clampF(v, lo, hi float64) float64 {
 		return hi
 	}
 	return v
-}
-
-func weightedKeys(m map[string]float64) []string {
-	var keys []string
-	for k, w := range m {
-		n := int(math.Round(w * 10))
-		if n < 1 {
-			n = 1
-		}
-		for i := 0; i < n; i++ {
-			keys = append(keys, k)
-		}
-	}
-	if len(keys) == 0 {
-		return []string{"crossfade"}
-	}
-	return keys
-}
-
-func weightedIntKeys(m map[int]float64) []int {
-	var keys []int
-	for k, w := range m {
-		n := int(math.Round(w * 10))
-		if n < 1 {
-			n = 1
-		}
-		for i := 0; i < n; i++ {
-			keys = append(keys, k)
-		}
-	}
-	if len(keys) == 0 {
-		return []int{8}
-	}
-	return keys
 }

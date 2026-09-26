@@ -19,6 +19,7 @@ var cacheDir = "cache"
 var uploadsDir = "cache/uploads"
 var outputDir = "output"
 var binDir = "bin" // managed directory for self-downloaded binaries (e.g. yt-dlp)
+var projectsDir = "projects"
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +50,7 @@ func main() {
 		uploadsDir = filepath.Join(cacheDir, "uploads")
 		outputDir = filepath.Join(absData, "output")
 		binDir = filepath.Join(absData, "bin")
+		projectsDir = filepath.Join(absData, "projects")
 		weightsFilePath = filepath.Join(absData, "preference_weights.json")
 	}
 
@@ -62,6 +64,7 @@ func main() {
 	os.MkdirAll(cacheDir, 0755)
 	os.MkdirAll(uploadsDir, 0755)
 	os.MkdirAll(outputDir, 0755)
+	os.MkdirAll(projectsDir, 0755)
 
 	mux := http.NewServeMux()
 
@@ -80,6 +83,9 @@ func main() {
 	mux.HandleFunc("POST /export/zip", handleExportZip)
 	mux.HandleFunc("POST /cache/clear", handleCacheClear)
 	mux.HandleFunc("GET /files/serve", handleServeFile)
+	mux.HandleFunc("POST /project/save", handleProjectSave)
+	mux.HandleFunc("GET /project/load", handleProjectLoad)
+	mux.HandleFunc("GET /projects", handleProjectList)
 
 	// Listen on random port
 	listener, err := net.Listen("tcp", ":0")
@@ -159,7 +165,7 @@ func handlePlan(w http.ResponseWriter, r *http.Request) {
 	if req.Scenarios <= 0 {
 		req.Scenarios = 5
 	}
-	plan := GenerateMixPlan(req.Tracks, req.TypeWeights, req.BarWeights, req.Scenarios)
+	plan := GenerateMixPlanV2(req.Tracks, req.TypeWeights, req.BarWeights, req.Settings)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(PlanResponse{Plan: plan})
 }
@@ -214,5 +220,11 @@ func handleRenderMix(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(RenderMixResponse{Error: err.Error()})
 		return
 	}
-	json.NewEncoder(w).Encode(RenderMixResponse{MP3Path: mp3, LRCPath: lrc})
+	resp := RenderMixResponse{LRCPath: lrc}
+	if strings.EqualFold(filepath.Ext(mp3), ".wav") {
+		resp.WAVPath = mp3
+	} else {
+		resp.MP3Path = mp3
+	}
+	json.NewEncoder(w).Encode(resp)
 }

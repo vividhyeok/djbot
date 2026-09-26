@@ -97,11 +97,11 @@ pub fn run() {
             //   3. <cwd>/backend/<name>          – dev mode (cargo run)
             let candidates = [
                 resource_path.join("binaries").join(worker_name),
+                resource_path.join("binaries").join(if cfg!(target_os = "windows") { "goworker.exe" } else { "goworker" }),
                 resource_path.join(worker_name),
-                std::env::current_dir()
-                    .unwrap_or_default()
-                    .join("backend")
-                    .join(worker_name),
+                resource_path.join(if cfg!(target_os = "windows") { "goworker.exe" } else { "goworker" }),
+                std::env::current_exe().unwrap_or_default().parent().unwrap_or(std::path::Path::new(".")).join(if cfg!(target_os = "windows") { "goworker.exe" } else { "goworker" }),
+                std::env::current_dir().unwrap_or_default().join("binaries").join(worker_name),
             ];
 
             let sidecar_path = candidates
@@ -119,7 +119,8 @@ pub fn run() {
 
             eprintln!("[djbot] using worker: {}", sidecar_path.display());
 
-            let ffmpeg = find_ffmpeg();
+            let ffmpeg = find_ffmpeg(&resource_path);
+            let bundled_ytdlp = resource_path.join("binaries").join(if cfg!(target_os = "windows") { "yt-dlp.exe" } else { "yt-dlp" });
 
             // Data directory:
             //   debug  → project root (avoids triggering tauri dev hot-reload)
@@ -148,6 +149,9 @@ pub fn run() {
                 let mut cmd = Command::new(&sidecar_path);
                 if let Some(ff) = ffmpeg {
                     cmd.args(["--ffmpeg", &ff]);
+                }
+                if bundled_ytdlp.exists() {
+                    cmd.env("YTDLP_PATH", bundled_ytdlp);
                 }
                 cmd.args(["--data-dir", &data_dir.to_string_lossy()]);
                 cmd.stdout(Stdio::piped()).stderr(Stdio::inherit());
@@ -185,8 +189,15 @@ pub fn run() {
 
 /// Find a usable ffmpeg binary. Checks PATH first, then well-known install
 /// locations for each platform. Returns Some(path) or None.
-fn find_ffmpeg() -> Option<String> {
-    // 1. Check PATH (works on all platforms after a normal install / brew install)
+fn find_ffmpeg(resource_dir: &std::path::Path) -> Option<String> {
+    // Bundled LGPL build is the production path; PATH remains a dev fallback.
+    let bundled = resource_dir.join("binaries").join(if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" });
+    if bundled.exists() {
+        eprintln!("[djbot] bundled ffmpeg: {}", bundled.display());
+        return Some(bundled.to_string_lossy().to_string());
+    }
+
+    // Check PATH (works in development environments).
     if which_in_path("ffmpeg") {
         eprintln!("[djbot] ffmpeg found in PATH");
         return Some("ffmpeg".to_string());

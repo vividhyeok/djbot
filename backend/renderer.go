@@ -67,9 +67,9 @@ func trimSilenceEnd(wavPath string) float64 {
 
 	// WAV: 44-byte header, then interleaved 16-bit stereo samples at 44100 Hz.
 	dataBytes := fileSize - 44
-	totalSamples := dataBytes / 2    // one int16 = 2 bytes
-	chunkSamples := int64(4410 * 2)  // 100 ms × 2 channels = 8820 samples
-	chunkBytes := chunkSamples * 2   // 17640 bytes per iteration
+	totalSamples := dataBytes / 2   // one int16 = 2 bytes
+	chunkSamples := int64(4410 * 2) // 100 ms × 2 channels = 8820 samples
+	chunkBytes := chunkSamples * 2  // 17640 bytes per iteration
 	buf := make([]byte, chunkBytes)
 
 	effSamples := totalSamples
@@ -155,6 +155,10 @@ func RenderPreview(trackAPath, trackBPath string, spec TransitionSpec, cacheDir 
 			atempoA, margin/speedA, fadeDur,
 			atempoB, delayMs, delayMs, fadeDur,
 		)
+	case "echo_out":
+		filterComplex = fmt.Sprintf("[0:a]%s,aecho=0.8:0.75:250|500:0.35|0.2,afade=t=out:st=%.2f:d=%.2f[a];[1:a]%s,adelay=%d|%d,afade=t=in:d=%.2f[b];[a][b]amix=inputs=2:duration=longest:normalize=0[out]", atempoA, margin/speedA, fadeDur, atempoB, delayMs, delayMs, fadeDur)
+	case "drop":
+		filterComplex = fmt.Sprintf("[0:a]%s,lowpass=f=900,afade=t=out:st=%.2f:d=%.2f[a];[1:a]%s,adelay=%d|%d,afade=t=in:d=0.08[b];[a][b]amix=inputs=2:duration=longest:normalize=0[out]", atempoA, margin/speedA, fadeDur, atempoB, delayMs, delayMs)
 	case "mashup":
 		filterComplex = fmt.Sprintf(
 			"[0:a]%s,volume=-1dB[a];"+
@@ -524,14 +528,17 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 		return "", "", fmt.Errorf("failed to drop master PCM to disk: %w", err)
 	}
 
-	log.Printf("[ffmpeg] encoding final mp3 from master PCM overlay...")
+	log.Printf("[ffmpeg] encoding final mix from master PCM overlay...")
 	encodeArgs := []string{
 		"-y",
 		"-f", "f32le", "-ar", "44100", "-ac", "2",
 		"-i", finalPcmPath,
 		"-af", "alimiter=limit=0.89:attack=5:release=50:level=false",
-		"-b:a", "320k", "-q:a", "0",
-		outputPath,
+	}
+	if strings.EqualFold(filepath.Ext(outputPath), ".wav") {
+		encodeArgs = append(encodeArgs, "-c:a", "pcm_s24le", outputPath)
+	} else {
+		encodeArgs = append(encodeArgs, "-b:a", "320k", "-q:a", "0", outputPath)
 	}
 
 	var encStderr bytes.Buffer
