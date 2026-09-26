@@ -89,6 +89,51 @@ func TestProjectSerialization(t *testing.T) {
 	}
 }
 
+func TestProjectV2PreservesManualTransitionState(t *testing.T) {
+	p := MixProject{SchemaVersion: 2, Name: "테스트 믹스", Transitions: []TransitionSpec{{
+		ID: "t1", Type: "bass_swap", Curve: "custom", CurveAmount: .72,
+		GainA: .9, GainB: 1.05, Locked: true, Manual: true,
+		Automation: Automation{LowA: []AutomationPoint{{Time: 0, Value: 1}, {Time: 8, Value: 0}}},
+	}}, AnalysisOverrides: []AnalysisOverride{{MaterialID: "m1", Phrases: []float64{12, 28}}}}
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got MixProject
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	tr := got.Transitions[0]
+	if !tr.Locked || !tr.Manual || tr.Curve != "custom" || len(tr.Automation.LowA) != 2 || len(got.AnalysisOverrides) != 1 {
+		t.Fatalf("manual state lost: %#v", got)
+	}
+}
+
+func TestConfidenceCalibratesInflatedAlignment(t *testing.T) {
+	a := syntheticAnalysis("a.wav", 120, .5)
+	b := syntheticAnalysis("b.wav", 138, .9)
+	b.Key = "F# Major"
+	a.DownbeatConfidence, b.DownbeatConfidence = .2, .2
+	a.PhraseConfidence, b.PhraseConfidence = .2, .2
+	tspec := TransitionSpec{AOutTime: a.Phrases[2], BInTime: b.Phrases[1], SpeedA: 1, SpeedB: 1}
+	low := scoreTransitionWithSettings(a, b, tspec, defaultSettings(MixSettings{}))
+	a.DownbeatConfidence, b.DownbeatConfidence = .95, .95
+	a.PhraseConfidence, b.PhraseConfidence = .95, .95
+	high := scoreTransitionWithSettings(a, b, tspec, defaultSettings(MixSettings{}))
+	if low.Total >= high.Total {
+		t.Fatalf("confidence did not affect aligned evidence: low %.2f high %.2f", low.Total, high.Total)
+	}
+}
+
+func TestSearchDepthChangesCandidateBudget(t *testing.T) {
+	a, b := syntheticAnalysis("a.wav", 120, .45), syntheticAnalysis("b.wav", 124, .65)
+	quick := GenerateMixPlanV2([]TrackAnalysis{a, b}, nil, nil, MixSettings{SearchDepth: "quick", PreserveOrder: true})
+	max := GenerateMixPlanV2([]TrackAnalysis{a, b}, nil, nil, MixSettings{SearchDepth: "max", PreserveOrder: true})
+	if max.Evaluated <= quick.Evaluated {
+		t.Fatalf("max=%d quick=%d", max.Evaluated, quick.Evaluated)
+	}
+}
+
 func writeToneWAV(path string, seconds int) error {
 	const sr = 44100
 	data := make([]int16, sr*seconds*2)

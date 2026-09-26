@@ -152,6 +152,15 @@ func detectPhraseBoundaries(beats, downbeats, energy []float64, onset []float64,
 	}
 	return out
 }
+
+func phraseConfidence(phrases []float64, duration, tempoConfidence float64) float64 {
+	if len(phrases) < 2 || duration <= 0 {
+		return .15
+	}
+	density := float64(len(phrases)-1) / math.Max(1, duration/30)
+	regularity := clampF(1-math.Abs(1-density)*.45, .25, 1)
+	return clampF(.2+.45*tempoConfidence+.25*regularity, .15, .8)
+}
 func absInt(x int) int {
 	if x < 0 {
 		return -x

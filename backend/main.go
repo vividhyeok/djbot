@@ -166,6 +166,11 @@ func handlePlan(w http.ResponseWriter, r *http.Request) {
 		req.Scenarios = 5
 	}
 	plan := GenerateMixPlanV2(req.Tracks, req.TypeWeights, req.BarWeights, req.Settings)
+	for i, locked := range req.Locked {
+		if i < len(plan.Selections) && locked.Locked {
+			plan.Selections[i] = locked
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(PlanResponse{Plan: plan})
 }

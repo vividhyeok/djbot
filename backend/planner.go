@@ -25,6 +25,27 @@ func defaultSettings(s MixSettings) MixSettings {
 	if s.SearchDepth == "" {
 		s.SearchDepth = "balanced"
 	}
+	if s.TransitionLength == 0 {
+		s.TransitionLength = .5
+	}
+	if s.TransitionCharacter == 0 {
+		s.TransitionCharacter = .5
+	}
+	if s.HarmonicPriority == 0 {
+		s.HarmonicPriority = .5
+	}
+	if s.PhrasePriority == 0 {
+		s.PhrasePriority = .7
+	}
+	if s.VocalOverlap == 0 {
+		s.VocalOverlap = .7
+	}
+	if s.TempoFlexibility == 0 {
+		s.TempoFlexibility = .5
+	}
+	if s.EnergyMovement == 0 {
+		s.EnergyMovement = .5
+	}
 	return s
 }
 func searchBudget(depth string) (int, int) {
@@ -68,7 +89,7 @@ func GenerateMixPlanV2(tracks []TrackAnalysis, typeW map[string]float64, barW ma
 	sels := make([]TransitionSpec, 0, len(ordered)-1)
 	evaluated := 0
 	for i := 0; i < len(ordered)-1; i++ {
-		cs := generateTransitionCandidates(ordered[i], ordered[i+1], typeW, barW, perPair)
+		cs := generateTransitionCandidatesWithSettings(ordered[i], ordered[i+1], typeW, barW, perPair, settings)
 		evaluated += len(cs)
 		sort.SliceStable(cs, func(a, b int) bool { return cs[a].Score.Total > cs[b].Score.Total })
 		all = append(all, cs)
@@ -147,8 +168,18 @@ func pairOrderScore(a, b TrackAnalysis, target float64) float64 {
 }
 
 func generateTransitionCandidates(a, b TrackAnalysis, typeW map[string]float64, barW map[int]float64, limit int) []TransitionSpec {
+	return generateTransitionCandidatesWithSettings(a, b, typeW, barW, limit, defaultSettings(MixSettings{}))
+}
+
+func generateTransitionCandidatesWithSettings(a, b TrackAnalysis, typeW map[string]float64, barW map[int]float64, limit int, settings MixSettings) []TransitionSpec {
 	types := []string{"crossfade", "bass_swap", "filter_fade", "echo_out", "cut", "drop", "long_blend", "mashup"}
 	bars := []int{4, 8, 16, 32}
+	if settings.TransitionLength < .34 {
+		bars = []int{4, 8, 16}
+	}
+	if settings.TransitionLength > .66 {
+		bars = []int{8, 16, 32}
+	}
 	if len(barW) > 0 {
 		bars = bars[:0]
 		for k := range barW {
@@ -173,9 +204,9 @@ func generateTransitionCandidates(a, b TrackAnalysis, typeW map[string]float64, 
 					}
 					spA := clampF(target/a.BPM, .92, 1.08)
 					spB := clampF(target/b.BPM, .92, 1.08)
-					t := TransitionSpec{ID: fmt.Sprintf("%s-%d-%d-%d", typ, int(x*10), int(y*10), nbar), Type: typ, Name: transitionName(typ), Duration: dur, Bars: nbar, AOutTime: x, BInTime: y, TargetBPM: target, SpeedA: spA, SpeedB: spB, PhraseAligned: nearAny(x, a.Phrases, 0.08), DownbeatAligned: nearAny(x, a.Downbeats, 0.08) && nearAny(y, b.Downbeats, 0.08)}
+					t := TransitionSpec{ID: fmt.Sprintf("%s-%d-%d-%d", typ, int(x*10), int(y*10), nbar), Type: typ, Name: transitionName(typ), Duration: dur, Bars: nbar, AOutTime: x, BInTime: y, TargetBPM: target, SpeedA: spA, SpeedB: spB, Curve: "equal_power", CurveAmount: .5, GainA: 1, GainB: 1, FilterCutoff: 400, FilterResonance: .7, EchoFeedback: .35, EchoMix: .25, PhraseAligned: nearAny(x, a.Phrases, 0.08), DownbeatAligned: nearAny(x, a.Downbeats, 0.08) && nearAny(y, b.Downbeats, 0.08)}
 					t.Automation = defaultAutomation(typ, dur, spA, spB)
-					t.Score = scoreTransition(a, b, t)
+					t.Score = scoreTransitionWithSettings(a, b, t, settings)
 					if w := typeW[typ]; w > 0 {
 						t.Score.Total = clampF(t.Score.Total+(w-1)*2, 0, 100)
 					}
@@ -261,6 +292,17 @@ func defaultAutomation(typ string, dur, sa, sb float64) Automation {
 }
 
 func scoreTransition(a, b TrackAnalysis, t TransitionSpec) ScoreBreakdown {
+	return scoreTransitionWithSettings(a, b, t, defaultSettings(MixSettings{}))
+}
+
+func confidenceOr(v, fallback float64) float64 {
+	if v <= 0 {
+		return fallback
+	}
+	return clampF(v, 0, 1)
+}
+
+func scoreTransitionWithSettings(a, b TrackAnalysis, t TransitionSpec, settings MixSettings) ScoreBreakdown {
 	s := ScoreBreakdown{}
 	s.Beat = alignmentScore(t.AOutTime, a.BeatTimes)
 	s.Downbeat = (alignmentScore(t.AOutTime, a.Downbeats) + alignmentScore(t.BInTime, b.Downbeats)) / 2
@@ -274,7 +316,16 @@ func scoreTransition(a, b TrackAnalysis, t TransitionSpec) ScoreBreakdown {
 	s.Spectral = spectralCompatibility(a, t.AOutTime, b, t.BInTime)
 	s.Vocal = vocalCompatibility(a, t.AOutTime, b, t.BInTime)
 	s.Smoothness = (s.Beat + s.Downbeat + s.Phrase + s.Tempo + s.Loudness) / 5
-	s.Total = .13*s.Beat + .12*s.Downbeat + .15*s.Phrase + .12*s.Harmony + .09*s.BPM + .08*s.Tempo + .11*s.Energy + .07*s.Loudness + .07*s.Spectral + .06*s.Vocal
+	downConf := math.Min(confidenceOr(a.DownbeatConfidence, .55), confidenceOr(b.DownbeatConfidence, .55))
+	phraseConf := math.Min(confidenceOr(a.PhraseConfidence, .5), confidenceOr(b.PhraseConfidence, .5))
+	vocalConf := math.Min(confidenceOr(a.VocalConfidence, .35), confidenceOr(b.VocalConfidence, .35))
+	harmonyW := .08 + .08*settings.HarmonicPriority
+	phraseW := (.06 + .10*settings.PhrasePriority) * phraseConf
+	tempoW := .05 + .08*(1-settings.TempoFlexibility)
+	vocalW := (.03 + .08*settings.VocalOverlap) * vocalConf
+	downW := .10 * downConf
+	baseW := .13 + downW + phraseW + harmonyW + .07 + tempoW + .11 + .07 + .07 + vocalW
+	s.Total = (s.Beat*.13 + s.Downbeat*downW + s.Phrase*phraseW + s.Harmony*harmonyW + s.BPM*.07 + s.Tempo*tempoW + s.Energy*.11 + s.Loudness*.07 + s.Spectral*.07 + s.Vocal*vocalW) / baseW
 	return roundScore(s)
 }
 func alignmentScore(x float64, v []float64) float64 {

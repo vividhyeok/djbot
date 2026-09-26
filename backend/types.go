@@ -3,24 +3,28 @@ package main
 const AnalysisVersion = 2
 
 type TrackAnalysis struct {
-	Version       int               `json:"version"`
-	Filepath      string            `json:"filepath"`
-	Hash          string            `json:"hash"`
-	Duration      float64           `json:"duration"`
-	BPM           float64           `json:"bpm"`
-	BPMConfidence float64           `json:"bpm_confidence"`
-	LoudnessDB    float64           `json:"loudness_db"`
-	Key           string            `json:"key"`
-	KeyConfidence float64           `json:"key_confidence"`
-	BeatTimes     []float64         `json:"beat_times"`
-	Downbeats     []float64         `json:"downbeats"`
-	Phrases       []float64         `json:"phrases"`
-	Segments      []Segment         `json:"segments"`
-	Energy        []float64         `json:"energy"`
-	Onset         []float64         `json:"onset,omitempty"`
-	Spectral      []SpectralFeature `json:"spectral,omitempty"`
-	Waveform      []float64         `json:"waveform,omitempty"`
-	Highlights    []Highlight       `json:"highlights"`
+	Version            int               `json:"version"`
+	Filepath           string            `json:"filepath"`
+	Hash               string            `json:"hash"`
+	Duration           float64           `json:"duration"`
+	BPM                float64           `json:"bpm"`
+	BPMConfidence      float64           `json:"bpm_confidence"`
+	LoudnessDB         float64           `json:"loudness_db"`
+	Key                string            `json:"key"`
+	KeyConfidence      float64           `json:"key_confidence"`
+	BeatTimes          []float64         `json:"beat_times"`
+	Downbeats          []float64         `json:"downbeats"`
+	Phrases            []float64         `json:"phrases"`
+	Segments           []Segment         `json:"segments"`
+	Energy             []float64         `json:"energy"`
+	Onset              []float64         `json:"onset,omitempty"`
+	Spectral           []SpectralFeature `json:"spectral,omitempty"`
+	Waveform           []float64         `json:"waveform,omitempty"`
+	Highlights         []Highlight       `json:"highlights"`
+	DownbeatConfidence float64           `json:"downbeat_confidence,omitempty"`
+	PhraseConfidence   float64           `json:"phrase_confidence,omitempty"`
+	SectionConfidence  float64           `json:"section_confidence,omitempty"`
+	VocalConfidence    float64           `json:"vocal_confidence,omitempty"`
 }
 type SpectralFeature struct {
 	Time      float64 `json:"time"`
@@ -92,6 +96,16 @@ type TransitionSpec struct {
 	SpeedB          float64        `json:"speed_b"`
 	PitchStepB      float64        `json:"pitch_step_b"`
 	FilterType      string         `json:"filter_type,omitempty"`
+	Curve           string         `json:"curve,omitempty"`
+	CurveAmount     float64        `json:"curve_amount,omitempty"`
+	GainA           float64        `json:"gain_a,omitempty"`
+	GainB           float64        `json:"gain_b,omitempty"`
+	FilterCutoff    float64        `json:"filter_cutoff,omitempty"`
+	FilterResonance float64        `json:"filter_resonance,omitempty"`
+	EchoFeedback    float64        `json:"echo_feedback,omitempty"`
+	EchoMix         float64        `json:"echo_mix,omitempty"`
+	Locked          bool           `json:"locked,omitempty"`
+	Manual          bool           `json:"manual,omitempty"`
 	PhraseAligned   bool           `json:"phrase_aligned"`
 	DownbeatAligned bool           `json:"downbeat_aligned"`
 	Automation      Automation     `json:"automation"`
@@ -145,6 +159,13 @@ type MixSettings struct {
 	AvoidConsecutiveArtist bool      `json:"avoid_consecutive_artist"`
 	FullLength             bool      `json:"full_length"`
 	EnergyCurve            []float64 `json:"energy_curve,omitempty"`
+	TransitionLength       float64   `json:"transition_length,omitempty"`
+	TransitionCharacter    float64   `json:"transition_character,omitempty"`
+	HarmonicPriority       float64   `json:"harmonic_priority,omitempty"`
+	PhrasePriority         float64   `json:"phrase_priority,omitempty"`
+	VocalOverlap           float64   `json:"vocal_overlap,omitempty"`
+	TempoFlexibility       float64   `json:"tempo_flexibility,omitempty"`
+	EnergyMovement         float64   `json:"energy_movement,omitempty"`
 }
 type MixPlan struct {
 	SortedTracks []TrackAnalysis    `json:"sorted_tracks"`
@@ -161,6 +182,14 @@ type PlanRequest struct {
 	BarWeights  map[int]float64    `json:"bar_weights,omitempty"`
 	Scenarios   int                `json:"scenarios,omitempty"`
 	Settings    MixSettings        `json:"settings"`
+	Locked      []TransitionSpec   `json:"locked,omitempty"`
+}
+
+type AnalysisOverride struct {
+	MaterialID string    `json:"material_id"`
+	Downbeats  []float64 `json:"downbeats,omitempty"`
+	Phrases    []float64 `json:"phrases,omitempty"`
+	Sections   []Segment `json:"sections,omitempty"`
 }
 type PlanResponse struct {
 	Plan  MixPlan `json:"plan"`
@@ -185,13 +214,15 @@ type TimelineClip struct {
 	Muted         bool    `json:"muted"`
 }
 type MixProject struct {
-	SchemaVersion int              `json:"schema_version"`
-	ID            string           `json:"id"`
-	Name          string           `json:"name"`
-	CreatedAt     string           `json:"created_at"`
-	UpdatedAt     string           `json:"updated_at"`
-	Materials     []AudioMaterial  `json:"materials"`
-	Clips         []TimelineClip   `json:"clips"`
-	Transitions   []TransitionSpec `json:"transitions"`
-	Settings      MixSettings      `json:"settings"`
+	SchemaVersion     int                `json:"schema_version"`
+	ID                string             `json:"id"`
+	Name              string             `json:"name"`
+	CreatedAt         string             `json:"created_at"`
+	UpdatedAt         string             `json:"updated_at"`
+	Materials         []AudioMaterial    `json:"materials"`
+	Clips             []TimelineClip     `json:"clips"`
+	Transitions       []TransitionSpec   `json:"transitions"`
+	Settings          MixSettings        `json:"settings"`
+	AnalysisOverrides []AnalysisOverride `json:"analysis_overrides,omitempty"`
+	EvaluationMode    bool               `json:"evaluation_mode,omitempty"`
 }

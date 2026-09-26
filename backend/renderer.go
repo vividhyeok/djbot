@@ -13,12 +13,44 @@ import (
 	"sync"
 
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/json"
 )
 
 func randHex(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+func ffmpegFadeCurve(curve string, in bool) string {
+	switch curve {
+	case "linear":
+		return "tri"
+	case "smooth":
+		if in {
+			return "qsin"
+		}
+		return "qsin"
+	case "sharp":
+		if in {
+			return "hsin"
+		}
+		return "hsin"
+	case "custom":
+		return "esin"
+	default:
+		return "qsin" // perceptually smoother equal-power approximation
+	}
+}
+
+func transitionPreviewKey(a, b string, spec TransitionSpec) string {
+	payload, _ := json.Marshal(struct {
+		A, B string
+		Spec TransitionSpec
+	}{a, b, spec})
+	h := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", h[:8])
 }
 
 // clampPlayBounds enforces a 30s minimum chunk and a 15s fallback guard.
@@ -131,6 +163,16 @@ func RenderPreview(trackAPath, trackBPath string, spec TransitionSpec, cacheDir 
 
 	atempoA := buildAtempoFilter(speedA, 0.0)
 	atempoB := buildAtempoFilter(speedB, spec.PitchStepB)
+	curveOut, curveIn := ffmpegFadeCurve(spec.Curve, false), ffmpegFadeCurve(spec.Curve, true)
+	gainA, gainB := spec.GainA, spec.GainB
+	if gainA <= 0 {
+		gainA = 1
+	}
+	if gainB <= 0 {
+		gainB = 1
+	}
+	baseA := fmt.Sprintf("%s,volume=%.4f", atempoA, gainA)
+	baseB := fmt.Sprintf("%s,volume=%.4f", atempoB, gainB)
 
 	switch spec.Type {
 	case "bass_swap":
@@ -138,46 +180,55 @@ func RenderPreview(trackAPath, trackBPath string, spec TransitionSpec, cacheDir 
 			"[0:a]%s,highpass=f=300,afade=t=out:st=%.2f:d=%.2f[a];"+
 				"[1:a]%s,adelay=%d|%d,afade=t=in:d=%.2f[b];"+
 				"[a][b]amix=inputs=2:duration=longest:normalize=0[out]",
-			atempoA, margin/speedA, fadeDur,
-			atempoB, delayMs, delayMs, fadeDur,
+			baseA, margin/speedA, fadeDur,
+			baseB, delayMs, delayMs, fadeDur,
 		)
 	case "cut":
 		cutPoint := margin / speedA
 		filterComplex = fmt.Sprintf(
 			"[0:a]%s,atrim=0:%.2f[a];[1:a]%s[b];[a][b]concat=n=2:v=0:a=1[out]",
-			atempoA, cutPoint, atempoB,
+			baseA, cutPoint, baseB,
 		)
 	case "filter_fade":
 		filterComplex = fmt.Sprintf(
 			"[0:a]%s,lowpass=f=400,afade=t=out:st=%.2f:d=%.2f[a];"+
 				"[1:a]%s,adelay=%d|%d,afade=t=in:d=%.2f[b];"+
 				"[a][b]amix=inputs=2:duration=longest:normalize=0[out]",
-			atempoA, margin/speedA, fadeDur,
-			atempoB, delayMs, delayMs, fadeDur,
+			baseA, margin/speedA, fadeDur,
+			baseB, delayMs, delayMs, fadeDur,
 		)
 	case "echo_out":
-		filterComplex = fmt.Sprintf("[0:a]%s,aecho=0.8:0.75:250|500:0.35|0.2,afade=t=out:st=%.2f:d=%.2f[a];[1:a]%s,adelay=%d|%d,afade=t=in:d=%.2f[b];[a][b]amix=inputs=2:duration=longest:normalize=0[out]", atempoA, margin/speedA, fadeDur, atempoB, delayMs, delayMs, fadeDur)
+		feedback, mix := spec.EchoFeedback, spec.EchoMix
+		if feedback <= 0 {
+			feedback = .35
+		}
+		if mix <= 0 {
+			mix = .25
+		}
+		filterComplex = fmt.Sprintf("[0:a]%s,aecho=0.8:%.2f:250|500:%.2f|%.2f,afade=t=out:st=%.2f:d=%.2f:curve=%s[a];[1:a]%s,adelay=%d|%d,afade=t=in:d=%.2f:curve=%s[b];[a][b]amix=inputs=2:duration=longest:normalize=0[out]", baseA, feedback, mix, mix*.6, margin/speedA, fadeDur, curveOut, baseB, delayMs, delayMs, fadeDur, curveIn)
 	case "drop":
-		filterComplex = fmt.Sprintf("[0:a]%s,lowpass=f=900,afade=t=out:st=%.2f:d=%.2f[a];[1:a]%s,adelay=%d|%d,afade=t=in:d=0.08[b];[a][b]amix=inputs=2:duration=longest:normalize=0[out]", atempoA, margin/speedA, fadeDur, atempoB, delayMs, delayMs)
+		filterComplex = fmt.Sprintf("[0:a]%s,lowpass=f=900,afade=t=out:st=%.2f:d=%.2f[a];[1:a]%s,adelay=%d|%d,afade=t=in:d=0.08[b];[a][b]amix=inputs=2:duration=longest:normalize=0[out]", baseA, margin/speedA, fadeDur, baseB, delayMs, delayMs)
 	case "mashup":
 		filterComplex = fmt.Sprintf(
 			"[0:a]%s,volume=-1dB[a];"+
 				"[1:a]%s,highpass=f=300,volume=1dB,adelay=%d|%d[b];"+
 				"[a][b]amix=inputs=2:duration=longest:normalize=0[out]",
-			atempoA, atempoB, delayMs, delayMs,
+			baseA, baseB, delayMs, delayMs,
 		)
 	default: // crossfade
 		filterComplex = fmt.Sprintf(
-			"[0:a]%s,afade=t=out:st=%.2f:d=%.2f[a];"+
-				"[1:a]%s,adelay=%d|%d,afade=t=in:d=%.2f[b];"+
+			"[0:a]%s,afade=t=out:st=%.2f:d=%.2f:curve=%s[a];"+
+				"[1:a]%s,adelay=%d|%d,afade=t=in:d=%.2f:curve=%s[b];"+
 				"[a][b]amix=inputs=2:duration=longest:normalize=0[out]",
-			atempoA, margin/speedA, fadeDur,
-			atempoB, delayMs, delayMs, fadeDur,
+			baseA, margin/speedA, fadeDur, curveOut,
+			baseB, delayMs, delayMs, fadeDur, curveIn,
 		)
 	}
 
-	outputPath := filepath.Join(cacheDir, fmt.Sprintf("preview_%s_%d_%s.mp3",
-		spec.Type, int(tOut), randHex(4)))
+	outputPath := filepath.Join(cacheDir, "preview_"+transitionPreviewKey(trackAPath, trackBPath, spec)+".mp3")
+	if st, err := os.Stat(outputPath); err == nil && st.Size() > 1024 {
+		return outputPath, nil
+	}
 
 	args := []string{
 		"-y",
@@ -282,10 +333,15 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 	// Solution: compute all fades in a tiny pre-pass (no FFmpeg calls),
 	// then run the single PCM loop.
 	type fadeInfo struct {
-		EntryFade float64
-		EntryType string
-		ExitFade  float64
-		ExitType  string
+		EntryFade    float64
+		EntryType    string
+		EntryCurve   string
+		EntryGain    float64
+		ExitFade     float64
+		ExitType     string
+		ExitCurve    string
+		ExitGain     float64
+		FilterCutoff float64
 	}
 	fades := make([]fadeInfo, len(playlist))
 
@@ -333,8 +389,13 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 				fadeSec := float64(xfadeMs) / 1000.0
 				fades[i].EntryFade = fadeSec
 				fades[i].EntryType = trans.Type
+				fades[i].EntryCurve = trans.Curve
+				fades[i].EntryGain = trans.GainB
 				fades[i-1].ExitFade = fadeSec
 				fades[i-1].ExitType = trans.Type
+				fades[i-1].ExitCurve = trans.Curve
+				fades[i-1].ExitGain = trans.GainA
+				fades[i-1].FilterCutoff = trans.FilterCutoff
 			}
 			prevTheoryMs = int(math.Round(chunkTheorySec * 1000.0))
 		}
@@ -410,21 +471,28 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 			gainDB = -10.0
 		}
 
-		baseFilter := fmt.Sprintf("atrim=start=%.3f:end=%.3f,asetpts=PTS-STARTPTS,volume=%.2fdB", startSec, endSec, gainDB)
+		mixGain := 1.0
+		if f.EntryGain > 0 {
+			mixGain = f.EntryGain
+		}
+		if f.ExitGain > 0 {
+			mixGain = f.ExitGain
+		}
+		baseFilter := fmt.Sprintf("atrim=start=%.3f:end=%.3f,asetpts=PTS-STARTPTS,volume=%.2fdB,volume=%.4f", startSec, endSec, gainDB, mixGain)
 
 		entryFilter := ""
 		if f.EntryFade > 0 {
 			switch f.EntryType {
 			case "bass_swap":
-				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", f.EntryFade)
+				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f:curve=%s", f.EntryFade, ffmpegFadeCurve(f.EntryCurve, true))
 			case "filter_fade":
-				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", f.EntryFade)
+				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f:curve=%s", f.EntryFade, ffmpegFadeCurve(f.EntryCurve, true))
 			case "mashup":
 				entryFilter = ",highpass=f=300,volume=1dB"
 			case "cut":
 				// immediate in — no filter
 			default:
-				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f", f.EntryFade)
+				entryFilter = fmt.Sprintf(",afade=t=in:d=%.3f:curve=%s", f.EntryFade, ffmpegFadeCurve(f.EntryCurve, true))
 			}
 		}
 
@@ -438,13 +506,17 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 			case "bass_swap":
 				exitFilter = fmt.Sprintf(",highpass=f=300,afade=t=out:st=%.3f:d=%.3f", fadeStart, f.ExitFade)
 			case "filter_fade":
-				exitFilter = fmt.Sprintf(",lowpass=f=400,afade=t=out:st=%.3f:d=%.3f", fadeStart, f.ExitFade)
+				cutoff := f.FilterCutoff
+				if cutoff <= 0 {
+					cutoff = 400
+				}
+				exitFilter = fmt.Sprintf(",lowpass=f=%.0f,afade=t=out:st=%.3f:d=%.3f:curve=%s", cutoff, fadeStart, f.ExitFade, ffmpegFadeCurve(f.ExitCurve, false))
 			case "mashup":
 				exitFilter = ",volume=-1dB"
 			case "cut":
 				exitFilter = fmt.Sprintf(",afade=t=out:st=%.3f:d=0.01", fadeStart)
 			default:
-				exitFilter = fmt.Sprintf(",afade=t=out:st=%.3f:d=%.3f", fadeStart, f.ExitFade)
+				exitFilter = fmt.Sprintf(",afade=t=out:st=%.3f:d=%.3f:curve=%s", fadeStart, f.ExitFade, ffmpegFadeCurve(f.ExitCurve, false))
 			}
 		}
 
