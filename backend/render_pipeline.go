@@ -32,7 +32,11 @@ func renderClip(path string, loudness float64, clip RenderClip, incoming, outgoi
 	var labels strings.Builder
 	for j, r := range clip.Regions {
 		label := fmt.Sprintf("r%d", j)
-		filter := fmt.Sprintf("[0:a]atrim=start=%.9f:end=%.9f,asetpts=PTS-STARTPTS,aresample=%d,aformat=sample_fmts=fltp:channel_layouts=stereo,atempo=%.9f,apad,atrim=end_sample=%d[%s]", r.SourceStart, r.SourceEnd, renderSampleRate, r.Speed, sampleCount(r.Duration), label)
+		tempo := "anull"
+		if math.Abs(r.Speed-1) > 1e-9 {
+			tempo = fmt.Sprintf("atempo=%.9f", r.Speed)
+		}
+		filter := fmt.Sprintf("[0:a]atrim=start=%.9f:end=%.9f,asetpts=PTS-STARTPTS,aresample=%d,aformat=sample_fmts=fltp:channel_layouts=stereo,%s,apad,atrim=end_sample=%d[%s]", r.SourceStart, r.SourceEnd, renderSampleRate, tempo, sampleCount(r.Duration), label)
 		graph = append(graph, filter)
 		fmt.Fprintf(&labels, "[%s]", label)
 	}

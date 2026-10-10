@@ -24,12 +24,15 @@ function Copy-ToolDependency($CommandName, $DestinationName, $StandaloneUrl, $Mi
     Invoke-WebRequest $StandaloneUrl -OutFile $destination
 }
 
-Write-Host "=== [1/3] Building Go backend ===" -ForegroundColor Cyan
+Write-Host "=== [1/4] Building Go backend ===" -ForegroundColor Cyan
 Push-Location $BackendDir
+try {
+go test ./...
+if ($LASTEXITCODE -ne 0) { throw "Go tests failed" }
 go build -o "$BinDir\goworker-$Triple.exe" .
 if ($LASTEXITCODE -ne 0) { throw "Go build failed" }
-Write-Host "OK: backend/goworker.exe" -ForegroundColor Green
-Pop-Location
+Write-Host "OK: $BinDir\goworker-$Triple.exe" -ForegroundColor Green
+} finally { Pop-Location }
 
 Write-Host "=== [2/4] Staging audio dependencies ===" -ForegroundColor Cyan
 Copy-ToolDependency "ffmpeg" "ffmpeg.exe" "" 10000000
@@ -37,11 +40,21 @@ Copy-ToolDependency "yt-dlp" "yt-dlp.exe" "https://github.com/yt-dlp/yt-dlp/rele
 
 Write-Host "=== [3/4] Building Tauri app ===" -ForegroundColor Cyan
 Push-Location $AppDir
+try {
+if (-not (Test-Path -LiteralPath (Join-Path $AppDir 'node_modules\@tauri-apps\cli'))) {
+    npm ci
+    if ($LASTEXITCODE -ne 0) { throw "Frontend dependency installation failed" }
+}
+npm run check
+if ($LASTEXITCODE -ne 0) { throw "Frontend syntax check failed" }
+npm test
+if ($LASTEXITCODE -ne 0) { throw "Frontend tests failed" }
 if ($Release) {
-    npm run tauri build
+    npm run tauri build -- --bundles nsis
 } else {
     npm run tauri dev
 }
-Pop-Location
+if ($LASTEXITCODE -ne 0) { throw "Tauri build failed" }
+} finally { Pop-Location }
 
 Write-Host "=== [4/4] Done ===" -ForegroundColor Green

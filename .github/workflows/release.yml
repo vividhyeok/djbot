@@ -3,6 +3,7 @@ name: Windows Build and Release
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
+    branches: [main, improve/production-mixing]
   workflow_dispatch:
 
 permissions:
@@ -35,6 +36,9 @@ jobs:
         run: |
           npm ci
           npm run check
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend syntax check failed' }
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend regression tests failed' }
 
       - name: Prepare bundled runtime dependencies
         shell: pwsh
@@ -47,6 +51,16 @@ jobs:
           if (-not $ffmpeg) { throw 'FFmpeg executable missing from archive' }
           Copy-Item -LiteralPath $ffmpeg.FullName -Destination (Join-Path $bin 'ffmpeg.exe')
           Invoke-WebRequest 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe' -OutFile (Join-Path $bin 'yt-dlp.exe')
+
+      - name: Test actual audio with bundled FFmpeg
+        shell: pwsh
+        working-directory: backend
+        run: |
+          $env:PATH = "$(Resolve-Path '../app/src-tauri/binaries');$env:PATH"
+          ffmpeg -version
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled FFmpeg does not start' }
+          go test -count=1 ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Audio regression tests failed' }
 
       - name: Build Go sidecar
         working-directory: backend

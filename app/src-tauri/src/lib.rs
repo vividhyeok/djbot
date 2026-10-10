@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::{BufRead, BufReader};
 use tauri::{Manager, State};
 
@@ -62,6 +63,10 @@ pub fn run() {
 
     let port_clone     = Arc::clone(&port_state);
     let data_dir_clone = Arc::clone(&data_dir_state);
+    let owned_worker = Arc::new(Mutex::new(None::<std::process::Child>));
+    let closing = Arc::new(AtomicBool::new(false));
+    let shutdown_worker = Arc::clone(&owned_worker);
+    let shutdown_flag = Arc::clone(&closing);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -70,17 +75,25 @@ pub fn run() {
             data_dir: Arc::clone(&data_dir_state),
         })
         .invoke_handler(tauri::generate_handler![get_worker_port, get_output_dir])
-        .on_window_event(|_window, event| {
+        .on_window_event(move |_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                // On Windows, kill the worker by name so it doesn't linger.
+                shutdown_flag.store(true, Ordering::SeqCst);
+                if let Ok(mut guard) = shutdown_worker.lock() {
+                  if let Some(mut child) = guard.take() {
+                    // Only this application's child tree; other DJBOT sessions
+                    // may be rendering and must not be terminated.
                 #[cfg(target_os = "windows")]
                 {
+                    use std::os::windows::process::CommandExt;
                     let _ = Command::new("taskkill")
-                        .args(["/F", "/IM", goworker_name(), "/T"])
+                        .args(["/F", "/PID", &child.id().to_string(), "/T"])
+                        .creation_flags(0x08000000)
                         .output();
                 }
-                // On macOS / Linux the child process inherits the session and
-                // will receive SIGHUP / be reaped when the parent exits.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                  }
+                }
             }
         })
         .setup(move |app| {
@@ -155,10 +168,25 @@ pub fn run() {
                 }
                 cmd.args(["--data-dir", &data_dir.to_string_lossy()]);
                 cmd.stdout(Stdio::piped()).stderr(Stdio::inherit());
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.creation_flags(0x08000000);
+                }
 
                 match cmd.spawn() {
                     Ok(mut child) => {
-                        if let Some(stdout) = child.stdout.take() {
+                        let stdout = child.stdout.take();
+                        {
+                            let mut guard = owned_worker.lock().unwrap();
+                            if closing.load(Ordering::SeqCst) {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                return;
+                            }
+                            *guard = Some(child);
+                        }
+                        if let Some(stdout) = stdout {
                             let reader = BufReader::new(stdout);
                             for line in reader.lines().flatten() {
                                 if let Some(port_str) = line.strip_prefix("PORT:") {
@@ -171,8 +199,11 @@ pub fn run() {
                             }
                         }
                         // Worker exited — log for diagnostics
-                        if let Ok(status) = child.wait() {
-                            eprintln!("[djbot] Go worker exited: {}", status);
+                        *port_arc.lock().unwrap() = None;
+                        if let Some(mut child) = owned_worker.lock().unwrap().take() {
+                            if let Ok(status) = child.wait() {
+                                eprintln!("[djbot] Go worker exited: {}", status);
+                            }
                         }
                     }
                     Err(e) => {

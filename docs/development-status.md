@@ -56,3 +56,12 @@ Pending: transition EQ/filter/echo/type-specific envelopes and arbitrary automat
 ## Frontend preview integration
 
 Frontend `startLivePreview` now requests `/render/preview` and plays the shared renderer's output. Stop aborts the pending request and invalidates late responses; seeking uses the media clock; edits debounce a new render. Existing full-mix audio is paused before auditioning. Node regression tests execute the actual frontend functions with mocked media/network and verify late-response suppression and media seeking. `npm test` (2 tests) and syntax check pass. Desktop audio/UI still unverified; full-set playback without export remains pending. Legacy Web Audio helper functions remain unused and should be removed during cleanup.
+
+## Windows build and sample comparison iteration
+
+- Windows release build and NSIS installer generation succeeded locally (`app/src-tauri/target/release/bundle/nsis/DJBOT_1.6.0_x64-setup.exe`). Packaging rerun after backend audio correction; this is a development artifact, not a published release or installation test.
+- Shutdown now tracks the owned child and terminates only its PID tree, not all same-named workers. Startup/close race guarded. Windows child processes hidden.
+- Local build script now checks test/build exit codes and restores working directory on failure. CI runs frontend tests and reruns Go tests with the actual bundled FFmpeg on PATH; branch pushes build artifacts without publishing a release.
+- New actual-PCM preview/export comparison initially failed (max sample error .0607). Skipping `atempo` for speed 1 reduced error; aligning control frames to 10 ms (441 samples) made the 3-second bass-swap fixture pass at <.0002 max error. This fixture is not proof of arbitrary-cue/all-effect parity; expand it.
+- `go test ./...`, `go vet ./...`, frontend syntax and 2 Node regression tests pass. rustfmt component is absent; compilation succeeds without it.
+- Local preexisting FFmpeg reports GPL configuration, whereas CI fetches LGPL. Local artifact is for validation; dependencies/notices and distribution license consistency remain to check before publishing.

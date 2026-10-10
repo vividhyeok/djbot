@@ -83,5 +83,5 @@ func transitionEffects(t TransitionSpec, incoming bool, start float64, id string
 	if len(nodes) == 0 {
 		return ""
 	}
-	return ",asetnsamples=n=256:p=0,asendcmd=c='" + commands.String() + "'," + strings.Join(nodes, ",")
+	return ",asetnsamples=n=441:p=0,asendcmd=c='" + commands.String() + "'," + strings.Join(nodes, ",")
 }
