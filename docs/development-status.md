@@ -25,4 +25,15 @@ The separate `C:/Users/user/djbot-work` checkout contains user changes and is no
 
 ## Verification
 
-Initial source inspection in progress. Baseline Go tests started. No listening or end-to-end UI verification claimed.
+Baseline and added Go tests pass on Windows with installed FFmpeg. No listening or end-to-end UI verification claimed.
+
+## Completed iterations
+
+- `cd6360b`, `24a7c28`: preserve source/import/export data, analysis edge cases, loopback binding, bundled download dependency; pushed.
+- Tempo matching now uses metrical half/double-time alternatives without halving audio playback. Low-confidence or distant tempos use short, natural-speed fallback transitions. Entry/exit candidates retain substantially more of the original recording.
+- Added `BuildRenderTimeline`: explicit source seconds vs output seconds, tempo-adjusted transition regions with natural-speed body, exact overlap and validation. **Not yet wired to renderer or UI**; existing rendering parity defects remain pending.
+- Regression coverage: 70/140 BPM, 120/124 beat-period equality, uncertain/missing BPM, short tracks, three-track timeline and conflicting middle cues. Full `go test ./...` passes.
+
+## Next implementation
+
+Replace legacy `RenderFinalMix`/`RenderPreview` internals with a shared renderer using `BuildRenderTimeline`. Apply effects locally to transition regions, preserve sample count, fail instead of skipping invalid tracks, avoid full-set memory canvas. Then connect frontend timeline/playback to the shared backend plan and render path. Verify actual exported PCM before claiming parity.

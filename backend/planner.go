@@ -172,6 +172,13 @@ func generateTransitionCandidates(a, b TrackAnalysis, typeW map[string]float64, 
 }
 
 func generateTransitionCandidatesWithSettings(a, b TrackAnalysis, typeW map[string]float64, barW map[int]float64, limit int, settings MixSettings) []TransitionSpec {
+	if a.Duration <= 0 || b.Duration <= 0 || !finite(a.Duration) || !finite(b.Duration) {
+		return nil
+	}
+	target, spA, spB, reliable := matchedTempo(a, b, settings.TempoFlexibility)
+	if !reliable {
+		return []TransitionSpec{safeTransition(a, b)}
+	}
 	types := []string{"crossfade", "bass_swap", "filter_fade", "echo_out", "cut", "drop", "long_blend", "mashup"}
 	bars := []int{4, 8, 16, 32}
 	if settings.TransitionLength < .34 {
@@ -194,16 +201,16 @@ func generateTransitionCandidatesWithSettings(a, b TrackAnalysis, typeW map[stri
 		for _, y := range entries {
 			for _, nbar := range bars {
 				for _, typ := range types {
-					target := weightedTempo(a.BPM, b.BPM)
 					dur := float64(nbar) * 4 * 60 / target
+					if nbar < 1 {
+						continue
+					}
 					if typ == "cut" {
 						dur = math.Min(dur, 4*60/target)
 					}
-					if x+dur > a.Duration || y+dur > b.Duration {
+					if x+dur*spA > a.Duration || y+dur*spB > b.Duration {
 						continue
 					}
-					spA := clampF(target/a.BPM, .92, 1.08)
-					spB := clampF(target/b.BPM, .92, 1.08)
 					t := TransitionSpec{ID: fmt.Sprintf("%s-%d-%d-%d", typ, int(x*10), int(y*10), nbar), Type: typ, Name: transitionName(typ), Duration: dur, Bars: nbar, AOutTime: x, BInTime: y, TargetBPM: target, SpeedA: spA, SpeedB: spB, Curve: "equal_power", CurveAmount: .5, GainA: 1, GainB: 1, FilterCutoff: 400, FilterResonance: .7, EchoFeedback: .35, EchoMix: .25, PhraseAligned: nearAny(x, a.Phrases, 0.08), DownbeatAligned: nearAny(x, a.Downbeats, 0.08) && nearAny(y, b.Downbeats, 0.08)}
 					t.Automation = defaultAutomation(typ, dur, spA, spB)
 					t.Score = scoreTransitionWithSettings(a, b, t, settings)
@@ -214,6 +221,9 @@ func generateTransitionCandidatesWithSettings(a, b TrackAnalysis, typeW map[stri
 				}
 			}
 		}
+	}
+	if len(out) == 0 {
+		return []TransitionSpec{safeTransition(a, b)}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score.Total > out[j].Score.Total })
 	if len(out) > limit {
@@ -232,9 +242,9 @@ func anchors(t TrackAnalysis, entry bool) []float64 {
 	var out []float64
 	for _, x := range src {
 		p := x / t.Duration
-		if entry && p <= .55 {
+		if entry && p <= .18 {
 			out = append(out, x)
-		} else if !entry && p >= .35 && p <= .94 {
+		} else if !entry && p >= .7 && p <= .94 {
 			out = append(out, x)
 		}
 	}
