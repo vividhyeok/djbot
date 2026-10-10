@@ -181,6 +181,12 @@ func handlePlan(w http.ResponseWriter, r *http.Request) {
 	if req.Scenarios <= 0 {
 		req.Scenarios = 5
 	}
+	for _, locked := range req.Locked {
+		if locked.Locked {
+			req.Settings.PreserveOrder = true
+			break
+		}
+	}
 	plan := GenerateMixPlanV2(req.Tracks, req.TypeWeights, req.BarWeights, req.Settings)
 	for i, locked := range req.Locked {
 		if i < len(plan.Selections) && locked.Locked {

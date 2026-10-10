@@ -25,7 +25,7 @@ func RenderPreview(trackAPath, trackBPath string, spec TransitionSpec, cacheDir 
 		return "", err
 	}
 	key := transitionPreviewKey(a.Hash, b.Hash, spec)
-	out := filepath.Join(cacheDir, "preview_v3_"+key+".wav")
+	out := filepath.Join(cacheDir, "preview_v4_"+key+".wav")
 	if st, err := os.Stat(out); err == nil && st.Size() > 44 {
 		return out, nil
 	}

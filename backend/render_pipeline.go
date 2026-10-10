@@ -30,13 +30,14 @@ func runAudioCommand(args ...string) error {
 func renderClip(path string, loudness float64, clip RenderClip, incoming, outgoing *TransitionSpec, output, graphPath string) error {
 	var graph []string
 	var labels strings.Builder
+	seek := clip.Regions[0].SourceStart
 	for j, r := range clip.Regions {
 		label := fmt.Sprintf("r%d", j)
 		tempo := "anull"
 		if math.Abs(r.Speed-1) > 1e-9 {
 			tempo = fmt.Sprintf("atempo=%.9f", r.Speed)
 		}
-		filter := fmt.Sprintf("[0:a]atrim=start=%.9f:end=%.9f,asetpts=PTS-STARTPTS,aresample=%d,aformat=sample_fmts=fltp:channel_layouts=stereo,%s,apad,atrim=end_sample=%d[%s]", r.SourceStart, r.SourceEnd, renderSampleRate, tempo, sampleCount(r.Duration), label)
+		filter := fmt.Sprintf("[0:a]atrim=start=%.9f:end=%.9f,asetpts=PTS-STARTPTS,aresample=%d,aformat=sample_fmts=fltp:channel_layouts=stereo,%s,apad,atrim=end_sample=%d[%s]", r.SourceStart-seek, r.SourceEnd-seek, renderSampleRate, tempo, sampleCount(r.Duration), label)
 		graph = append(graph, filter)
 		fmt.Fprintf(&labels, "[%s]", label)
 	}
@@ -54,6 +55,9 @@ func renderClip(path string, loudness float64, clip RenderClip, incoming, outgoi
 	if outgoing != nil {
 		filter += transitionEffects(*outgoing, false, clip.Duration-outgoing.Duration, "out")
 		filter += fadeExpression(*outgoing, false, clip.Duration-outgoing.Duration)
+	} else {
+		d := math.Min(2, clip.Duration*.15)
+		filter += fmt.Sprintf(",afade=t=out:st=%.9f:d=%.9f", clip.Duration-d, d)
 	}
 	// Short edge ramps prevent a source trim from introducing a sample step.
 	filter += fmt.Sprintf(",afade=t=in:d=0.003,afade=t=out:st=%.9f:d=0.003,apad,atrim=end_sample=%d[out]", math.Max(0, clip.Duration-.003), sampleCount(clip.Duration))
@@ -61,7 +65,8 @@ func renderClip(path string, loudness float64, clip RenderClip, incoming, outgoi
 	if err := os.WriteFile(graphPath, []byte(strings.Join(graph, ";")), 0600); err != nil {
 		return err
 	}
-	return runAudioCommand("-i", path, "-/filter_complex", graphPath, "-map", "[out]", "-ar", "44100", "-c:a", "pcm_f32le", output)
+	sourceDuration := clip.Regions[len(clip.Regions)-1].SourceEnd - seek
+	return runAudioCommand("-ss", fmt.Sprintf("%.9f", seek), "-t", fmt.Sprintf("%.9f", sourceDuration), "-i", path, "-/filter_complex", graphPath, "-map", "[out]", "-ar", "44100", "-c:a", "pcm_f32le", output)
 }
 
 func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputPath, cacheDir string) (string, string, error) {
@@ -97,8 +102,8 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 		if i < len(transitions) {
 			out = &transitions[i]
 		}
-		staged := filepath.Join(work, fmt.Sprintf("clip-%d.wav", i))
-		if err := renderClip(track.Filepath, track.LoudnessDB, clips[i], in, out, staged, filepath.Join(work, "clip.ffgraph")); err != nil {
+		staged, err := cachedRenderClip(track, clips[i], in, out, cacheDir, work)
+		if err != nil {
 			return "", "", fmt.Errorf("track %d (%s): %w", i+1, track.Filename, err)
 		}
 		args = append(args, "-i", staged)

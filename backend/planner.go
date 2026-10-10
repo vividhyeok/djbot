@@ -94,7 +94,11 @@ func GenerateMixPlanV2(tracks []TrackAnalysis, typeW map[string]float64, barW ma
 		sort.SliceStable(cs, func(a, b int) bool { return cs[a].Score.Total > cs[b].Score.Total })
 		all = append(all, cs)
 		if len(cs) > 0 {
-			sels = append(sels, cs[0])
+			choice := 0
+			if settings.Variation > 0 {
+				choice = settings.Variation % min(3, len(cs))
+			}
+			sels = append(sels, cs[choice])
 			n := 3
 			if len(cs) < n {
 				n = len(cs)
@@ -142,7 +146,11 @@ func beamOrder(tracks []TrackAnalysis, s MixSettings, width int) []TrackAnalysis
 		states = next
 	}
 	out := make([]TrackAnalysis, len(tracks))
-	for i, x := range states[0].seq {
+	choice := 0
+	if s.Variation > 0 {
+		choice = s.Variation % min(3, len(states))
+	}
+	for i, x := range states[choice].seq {
 		out[i] = tracks[x]
 	}
 	return out
@@ -177,7 +185,7 @@ func generateTransitionCandidatesWithSettings(a, b TrackAnalysis, typeW map[stri
 	}
 	target, spA, spB, reliable := matchedTempo(a, b, settings.TempoFlexibility)
 	if !reliable {
-		return []TransitionSpec{safeTransition(a, b)}
+		return []TransitionSpec{pacedSafeTransition(a, b, settings)}
 	}
 	types := []string{"crossfade", "bass_swap", "filter_fade", "echo_out", "cut", "drop", "long_blend", "mashup"}
 	bars := []int{4, 8, 16, 32}
@@ -194,7 +202,7 @@ func generateTransitionCandidatesWithSettings(a, b TrackAnalysis, typeW map[stri
 		}
 		sort.Ints(bars)
 	}
-	exits := anchors(a, false)
+	exits := pacedExits(a, settings)
 	entries := anchors(b, true)
 	var out []TransitionSpec
 	for _, x := range exits {
@@ -202,6 +210,9 @@ func generateTransitionCandidatesWithSettings(a, b TrackAnalysis, typeW map[stri
 			for _, nbar := range bars {
 				for _, typ := range types {
 					dur := float64(nbar) * 4 * 60 / target
+					if settings.ListeningMode == "quick" && dur*math.Max(spA, spB) > math.Min(a.Duration, b.Duration)*.18 {
+						continue
+					}
 					if nbar < 1 {
 						continue
 					}
@@ -223,7 +234,7 @@ func generateTransitionCandidatesWithSettings(a, b TrackAnalysis, typeW map[stri
 		}
 	}
 	if len(out) == 0 {
-		return []TransitionSpec{safeTransition(a, b)}
+		return []TransitionSpec{pacedSafeTransition(a, b, settings)}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score.Total > out[j].Score.Total })
 	if len(out) > limit {

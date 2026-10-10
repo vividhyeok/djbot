@@ -6,7 +6,7 @@ import {readFileSync} from 'node:fs';
 function harness(){
   let resolve;const pending=new Promise(r=>resolve=r);const played=[];
   const elements=new Map();
-  const document={getElementById(id){if(!elements.has(id))elements.set(id,{pause(){},style:{}});return elements.get(id)}};
+  const document={querySelectorAll(){return []},getElementById(id){if(!elements.has(id))elements.set(id,{pause(){},removeAttribute(){},load(){},style:{}});return elements.get(id)}};
   class Audio {constructor(path){this.path=path;this.currentTime=0;this.duration=20}async play(){played.push(this.path)}pause(){}removeAttribute(){}load(){}}
   const ctx=vm.createContext({window:{},document,Audio,AbortController,structuredClone,setTimeout,clearTimeout,fetch:async()=>{const data=await pending;return {ok:true,json:async()=>data}}});
   vm.runInContext(readFileSync(new URL('../src/app.js',import.meta.url),'utf8').replace(/init\(\);\s*$/,''),ctx);
@@ -59,4 +59,32 @@ test('saving a plan also retains library tracks not yet analysed',()=>{
 test('serialization rejects sources which have not been uploaded',()=>{
   const h=harness();vm.runInContext('state.plan=null;state.tracks=[{path:null}]',h.ctx);
   assert.throws(()=>vm.runInContext('projectDocument()',h.ctx),/파일/);
+});
+
+test('timeline measures tempo-adjusted overlap in output seconds',()=>{
+ const h=harness();
+ vm.runInContext(`state.plan={sorted_tracks:[{duration:20},{duration:20}],selections:[{a_out_time:10,b_in_time:2,duration:4,speed_a:1.1,speed_b:.9}]}`,h.ctx);
+ const a=JSON.parse(vm.runInContext('JSON.stringify(buildArrangement())',h.ctx));
+ assert.equal(a[0].duration,14);assert.equal(a[1].start,10);
+ assert.ok(Math.abs(a[1].duration-18.4)<1e-8);assert.equal(a[0].sourceEnd,14.4);
+});
+
+test('Auto Mix can run repeatedly and resets stale playback and undo',async()=>{
+ const h=harness();
+ vm.runInContext(`state.tracks=[{analysis:{filepath:'a',duration:20}},{analysis:{filepath:'b',duration:20}}];
+ state.output='old.mp3';state.history=['old'];
+ renderLibrary=renderTimeline=selectTransition=updateUndo=updateTransport=toast=status=()=>{};`,h.ctx);
+ const first=vm.runInContext('autoMix()',h.ctx);
+ h.resolve({plan:{sorted_tracks:[{filepath:'a',duration:20},{filepath:'b',duration:20}],selections:[{a_out_time:10,b_in_time:0,duration:2}],settings:{}}});
+ await first;await vm.runInContext('autoMix()',h.ctx);
+ assert.equal(vm.runInContext('state.generation',h.ctx),2);
+ assert.equal(vm.runInContext('state.planning',h.ctx),false);
+ assert.equal(vm.runInContext('state.output',h.ctx),null);
+ assert.equal(vm.runInContext('state.history.length',h.ctx),0);
+});
+
+test('quick listening also shortens the final track in export and timeline',()=>{
+ const h=harness();vm.runInContext(`state.plan={sorted_tracks:[{duration:240},{duration:240}],settings:{listening_mode:'quick'},selections:[{a_out_time:75,b_in_time:0,duration:2}]}`,h.ctx);
+ assert.equal(vm.runInContext('playlist()[1].play_end',h.ctx),75);
+ assert.equal(vm.runInContext('buildArrangement()[1].sourceEnd',h.ctx),75);
 });

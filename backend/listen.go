@@ -38,7 +38,7 @@ func handleListen(w http.ResponseWriter, r *http.Request) {
 		Tracks      []TrackEntry
 		Transitions []TransitionSpec
 		Hashes      []string
-	}{1, req.Playlist, req.Transitions, identities})
+	}{2, req.Playlist, req.Transitions, identities})
 	sum := sha256.Sum256(keyData)
 	dir, _ := filepath.Abs(cacheDir)
 	path := filepath.Join(dir, fmt.Sprintf("listen_%x.mp3", sum[:16]))

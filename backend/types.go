@@ -153,6 +153,8 @@ type TrackWithAnalysis struct {
 	Analysis TrackAnalysis
 }
 type MixSettings struct {
+	ListeningMode          string    `json:"listening_mode,omitempty"`
+	Variation              int       `json:"variation,omitempty"`
 	Style                  string    `json:"style"`
 	SearchDepth            string    `json:"search_depth"`
 	PreserveOrder          bool      `json:"preserve_order"`
