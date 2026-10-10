@@ -126,7 +126,7 @@ func trimSilenceEnd(wavPath string) float64 {
 }
 
 // RenderPreview renders a transition preview using ffmpeg filter_complex
-func RenderPreview(trackAPath, trackBPath string, spec TransitionSpec, cacheDir string) (string, error) {
+func renderPreviewLegacy(trackAPath, trackBPath string, spec TransitionSpec, cacheDir string) (string, error) {
 	margin := 10.0
 	overlap := spec.Duration
 	if overlap <= 0 {

@@ -45,3 +45,10 @@ Replace legacy `RenderFinalMix`/`RenderPreview` internals with a shared renderer
 Actual FFmpeg WAV/MP3 regression: two 12-second synthetic tones, 1.05/.95 transition speeds, 2-second overlap; decoded duration within 2 ms, peak bounds checked, LRC cue at 8 seconds, input playlist unchanged, temporary files cleaned. Existing output preservation on missing source verified. Full Go suite and vet pass.
 
 Pending: transition EQ/filter/echo/type-specific envelopes and arbitrary automation are not yet implemented in the new renderer; legacy preview and frontend still use their old paths. This is an intermediate development branch, not a release-ready build. Next iteration must close these regressions and connect preview, then test multi-track/full app flows. Old renderer remains temporarily under `renderFinalMixLegacy` for reference and should be removed once replacement verified.
+
+## Effects and backend preview iteration
+
+- Added low/mid/high EQ and filter automation using 50 Hz FFmpeg commands, with 256-sample audio frames. Effects are enabled only within the transition interval. Bass-swap/filter-fade get default automation when unspecified.
+- Actual audio regression confirms low-EQ attenuation within the transition, unchanged body RMS, and unchanged sample length. Filter command path executes successfully.
+- Backend `/render/preview` now uses the same final renderer for an 8-second neighborhood, with original-track cached analysis for consistent gain. Preview cache includes content hashes and renderer revision; publication serialized. Full Go suite passes including FFmpeg preview rendering.
+- **Still pending:** frontend currently bypasses backend preview with its own Web Audio implementation. Must connect it to shared rendering. Echo, cut/drop envelopes, pitch, volume automation, effect-boundary smoothing, actual preview/export sample comparison, multi-track tests, Windows build and UX verification remain required. No listening validation claimed.

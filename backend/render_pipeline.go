@@ -44,9 +44,11 @@ func renderClip(path string, loudness float64, clip RenderClip, incoming, outgoi
 		filter += fmt.Sprintf(",volume=%.6fdB", clampF(-18-loudness, -8, 8))
 	}
 	if incoming != nil {
+		filter += transitionEffects(*incoming, true, 0, "in")
 		filter += fadeExpression(*incoming, true, 0)
 	}
 	if outgoing != nil {
+		filter += transitionEffects(*outgoing, false, clip.Duration-outgoing.Duration, "out")
 		filter += fadeExpression(*outgoing, false, clip.Duration-outgoing.Duration)
 	}
 	// Short edge ramps prevent a source trim from introducing a sample step.
