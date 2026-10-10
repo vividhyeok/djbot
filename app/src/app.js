@@ -95,17 +95,32 @@ async function regenerateAlternatives(){if(!state.port)return;const d=await requ
 
 function sourceFor(path){return convertFileSrc(path)}
 function setupMedia(path){const el=new Audio(sourceFor(path));el.preload='auto';const ctx=state.preview?.ctx||new AudioContext(),src=ctx.createMediaElementSource(el),low=ctx.createBiquadFilter(),filter=ctx.createBiquadFilter(),gain=ctx.createGain();low.type='lowshelf';low.frequency.value=220;filter.type='lowpass';src.connect(low).connect(filter).connect(gain).connect(ctx.destination);return{el,src,low,filter,gain}}
-async function startLivePreview(){stopPreview();const i=state.selected,t=currentTransition();if(i<0||!t)return;const ctx=new AudioContext();state.preview={ctx,a:null,b:null,start:performance.now(),raf:0,timer:0};try{const a=setupMedia(state.plan.sorted_tracks[i].filepath),b=setupMedia(state.plan.sorted_tracks[i+1].filepath);state.preview.a=a;state.preview.b=b;const margin=Math.min(8,t.a_out_time);a.el.currentTime=Math.max(0,t.a_out_time-margin);b.el.currentTime=Math.max(0,t.b_in_time);await ctx.resume();await a.el.play();state.preview.start=performance.now();state.preview.margin=margin;state.preview.timer=setTimeout(()=>b.el.play().catch(()=>{}),margin*1000);animatePreview();setPlaying(true);status('실시간 전환 미리듣기','ok')}catch(e){stopPreview();toast(`미리듣기를 시작할 수 없습니다: ${e.message}`,'error') }}
+async function startLivePreview(){
+  stopPreview();const i=state.selected,t=currentTransition();if(i<0||!t||!state.port)return;
+  $('audio').pause();
+  const p={el:null,timer:0,controller:new AbortController(),index:i};state.preview=p;
+  status('출력과 동일한 전환 미리듣기 준비 중');setPlaying(true);
+  try{
+    const d=await request('/render/preview',{method:'POST',headers:{'Content-Type':'application/json'},signal:p.controller.signal,body:JSON.stringify({track_a_path:state.plan.sorted_tracks[i].filepath,track_b_path:state.plan.sorted_tracks[i+1].filepath,spec:structuredClone(t)})});
+    if(state.preview!==p)return;if(d.error)throw new Error(d.error);
+    const el=new Audio(sourceFor(d.output_path));p.el=el;el.loop=state.loop;
+    p.origin=(state.arrangement[i+1]?.start||0)-Math.min(8,t.a_out_time);
+    el.ontimeupdate=()=>{if(state.preview!==p)return;state.playhead=Math.max(0,p.origin+el.currentTime);updatePlayhead();updateTransport()};
+    el.onended=()=>{if(state.preview===p)stopPreview()};
+    el.onerror=()=>{if(state.preview===p){stopPreview();toast('미리듣기 오디오를 읽을 수 없습니다.','error')}};
+    await el.play();if(state.preview!==p){el.pause();return}status('전환 미리듣기 재생 중','ok');
+  }catch(e){if(state.preview!==p)return;stopPreview();if(e.name!=='AbortError')friendlyError('전환 미리듣기',e)}
+}
 function animatePreview(){const p=state.preview;if(!p)return;const t=currentTransition(),elapsed=(performance.now()-p.start)/1000,x=clamp((elapsed-p.margin)/Math.max(.01,t.duration),0,1);applyAudioNodes(p.a,t,fadeAt(x,curvePower(t.curve,t.curve_amount),t.curve)*(t.gain_a||1),'a',x);applyAudioNodes(p.b,t,(1-fadeAt(x,curvePower(t.curve,t.curve_amount),t.curve))*(t.gain_b||1),'b',x);state.playhead=(state.arrangement[state.selected]?.start||0)+Math.max(0,elapsed);updatePlayhead();updateTransport();if(elapsed>=p.margin+t.duration+4&&state.loop){startLivePreview();return}p.raf=requestAnimationFrame(animatePreview)}
 function applyAudioNodes(node,t,gain,side,x){if(!node)return;const arr=t.automation?.[`low_${side}`],low=interpolate(arr,x*t.duration,1);node.low.gain.value=(low-1)*18;const farr=t.automation?.[`filter_${side}`],fv=interpolate(farr,x*t.duration,1);node.filter.frequency.value=400*Math.pow(40,clamp(fv,0,1));node.filter.Q.value=t.filter_resonance||.7;node.gain.gain.value=clamp(gain,0,1.5)}
 function interpolate(arr,time,fallback){if(!arr?.length)return fallback;if(time<=arr[0].time)return arr[0].value;for(let i=1;i<arr.length;i++){if(time<=arr[i].time){const p=(time-arr[i-1].time)/Math.max(.001,arr[i].time-arr[i-1].time);return arr[i-1].value+(arr[i].value-arr[i-1].value)*p}}return arr.at(-1).value}
-function applyPreviewNow(){const p=state.preview,t=currentTransition();if(!p||!t)return;const elapsed=(performance.now()-p.start)/1000,x=clamp((elapsed-p.margin)/Math.max(.01,t.duration),0,1);applyAudioNodes(p.a,t,fadeAt(x,curvePower(t.curve,t.curve_amount),t.curve)*(t.gain_a||1),'a',x);applyAudioNodes(p.b,t,(1-fadeAt(x,curvePower(t.curve,t.curve_amount),t.curve))*(t.gain_b||1),'b',x)}
-function stopPreview(){const p=state.preview;if(!p)return;cancelAnimationFrame(p.raf);clearTimeout(p.timer);for(const n of [p.a,p.b])if(n){n.el.pause();n.el.src=''}p.ctx.close().catch(()=>{});state.preview=null;setPlaying(false)}
+function applyPreviewNow(){state.output=null;const p=state.preview;if(!p||!currentTransition())return;clearTimeout(p.timer);p.timer=setTimeout(()=>{if(state.preview===p)startLivePreview()},350)}
+function stopPreview(){const p=state.preview;if(!p)return;state.preview=null;clearTimeout(p.timer);p.controller?.abort();if(p.el){p.el.pause();p.el.removeAttribute('src');p.el.load()}setPlaying(false)}
 function toggleLoop(){if(state.selected<0)return toast('먼저 전환을 선택하세요.');state.loop=!state.loop;$('loopBtn').setAttribute('aria-pressed',String(state.loop));if(state.loop)startLivePreview();else stopPreview()}
 function togglePlay(){if(state.selected>=0){if(state.preview)stopPreview();else startLivePreview();return}const a=$('audio');if(!a.src)return toast('전환을 선택해 미리듣거나 Mix를 Export하세요.');a.paused?a.play():a.pause();setPlaying(!a.paused)}
 function setPlaying(on){$('playBtn').textContent=on?'Ⅱ':'▶'}
 function quickAudition(i){if(!state.plan&&state.tracks[i]?.path){const a=$('audio');a.src=sourceFor(state.tracks[i].path);a.play().catch(()=>{});setPlaying(true)}}
-function seekBy(delta){if(state.preview){const p=state.preview;for(const n of[p.a,p.b])if(n)n.el.currentTime=Math.max(0,n.el.currentTime+delta)}else if($('audio').src)$('audio').currentTime=Math.max(0,$('audio').currentTime+delta);else seekMix(state.playhead+delta)}
+function seekBy(delta){if(state.preview){const el=state.preview.el;if(el)el.currentTime=clamp(el.currentTime+delta,0,Number.isFinite(el.duration)?el.duration:0)}else if($('audio').src)$('audio').currentTime=Math.max(0,$('audio').currentTime+delta);else seekMix(state.playhead+delta)}
 function seekMix(sec){state.playhead=clamp(sec,0,totalDuration());updatePlayhead();if(state.output&&$('audio').duration)$('audio').currentTime=state.playhead}
 function updatePlayhead(){const pps=pixelsPerSecond();$('playhead').style.transform=`translateX(${42+state.playhead*pps}px)`;if(state.follow&&state.preview){const tl=$('timeline'),x=42+state.playhead*pps;if(x-tl.scrollLeft>tl.clientWidth*.8)tl.scrollLeft=x-tl.clientWidth*.4}}
 function updateTransport(){const a=$('audio'),cur=state.preview?state.playhead:(a.currentTime||state.playhead),dur=state.output?(a.duration||totalDuration()):totalDuration();$('timeDisplay').textContent=`${fmt(cur)} / ${fmt(dur)}`;$('seekBar').value=dur?cur/dur*1000:0}

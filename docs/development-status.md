@@ -52,3 +52,7 @@ Pending: transition EQ/filter/echo/type-specific envelopes and arbitrary automat
 - Actual audio regression confirms low-EQ attenuation within the transition, unchanged body RMS, and unchanged sample length. Filter command path executes successfully.
 - Backend `/render/preview` now uses the same final renderer for an 8-second neighborhood, with original-track cached analysis for consistent gain. Preview cache includes content hashes and renderer revision; publication serialized. Full Go suite passes including FFmpeg preview rendering.
 - **Still pending:** frontend currently bypasses backend preview with its own Web Audio implementation. Must connect it to shared rendering. Echo, cut/drop envelopes, pitch, volume automation, effect-boundary smoothing, actual preview/export sample comparison, multi-track tests, Windows build and UX verification remain required. No listening validation claimed.
+
+## Frontend preview integration
+
+Frontend `startLivePreview` now requests `/render/preview` and plays the shared renderer's output. Stop aborts the pending request and invalidates late responses; seeking uses the media clock; edits debounce a new render. Existing full-mix audio is paused before auditioning. Node regression tests execute the actual frontend functions with mocked media/network and verify late-response suppression and media seeking. `npm test` (2 tests) and syntax check pass. Desktop audio/UI still unverified; full-set playback without export remains pending. Legacy Web Audio helper functions remain unused and should be removed during cleanup.
