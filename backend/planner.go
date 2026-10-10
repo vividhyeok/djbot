@@ -258,6 +258,9 @@ func transitionName(t string) string {
 	return map[string]string{"crossfade": "Smooth Crossfade", "bass_swap": "Bass Swap", "filter_fade": "Filter Fade", "echo_out": "Echo Out", "cut": "Beat Cut", "drop": "Drop Transition", "long_blend": "Long Blend", "mashup": "Mashup Blend"}[t]
 }
 func weightedTempo(a, b float64) float64 {
+	if a <= 0 || b <= 0 || math.IsNaN(a) || math.IsNaN(b) || math.IsInf(a, 0) || math.IsInf(b, 0) {
+		return 120
+	}
 	for b > a*1.45 {
 		b /= 2
 	}

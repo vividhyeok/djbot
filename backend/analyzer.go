@@ -141,6 +141,7 @@ func AnalyzeTrack(path, cacheDir string) (*TrackAnalysis, error) {
 
 	cachePath := filepath.Join(cacheDir, fmt.Sprintf("%s_analysis_v%d.json", hash, AnalysisVersion))
 	if cached, err := loadCachedAnalysis(cachePath); err == nil {
+		cached.Filepath = path
 		log.Printf("[cache hit] %s", path)
 		return cached, nil
 	}

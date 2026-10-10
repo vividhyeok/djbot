@@ -67,7 +67,7 @@ func detectDownbeats(beats, energy []float64) []float64 {
 	if len(beats) < 4 {
 		return append([]float64(nil), beats...)
 	}
-	bestPhase, best := -1, -1.0
+	bestPhase, best := 0, -1.0
 	for phase := 0; phase < 4; phase++ {
 		var s float64
 		var n int
@@ -192,6 +192,9 @@ func extractWaveform(samples []float32, points int) []float64 {
 	}
 	for i := range out {
 		a := i * step
+		if a >= len(samples) {
+			break
+		}
 		b := a + step
 		if b > len(samples) {
 			b = len(samples)
