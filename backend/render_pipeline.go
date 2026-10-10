@@ -61,7 +61,7 @@ func renderClip(path string, loudness float64, clip RenderClip, incoming, outgoi
 	if err := os.WriteFile(graphPath, []byte(strings.Join(graph, ";")), 0600); err != nil {
 		return err
 	}
-	return runAudioCommand("-i", path, "-filter_complex_script", graphPath, "-map", "[out]", "-ar", "44100", "-c:a", "pcm_f32le", output)
+	return runAudioCommand("-i", path, "-/filter_complex", graphPath, "-map", "[out]", "-ar", "44100", "-c:a", "pcm_f32le", output)
 }
 
 func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputPath, cacheDir string) (string, string, error) {
@@ -119,7 +119,7 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 	tmpPath := tmp.Name()
 	tmp.Close()
 	defer os.Remove(tmpPath)
-	args = append(args, "-filter_complex_script", graphPath, "-map", "[out]", "-ar", "44100")
+	args = append(args, "-/filter_complex", graphPath, "-map", "[out]", "-ar", "44100")
 	if ext == ".wav" {
 		args = append(args, "-c:a", "pcm_s24le")
 	} else {

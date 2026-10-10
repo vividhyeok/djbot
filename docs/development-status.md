@@ -77,3 +77,7 @@ CI 38063234612 failed because Node 20 on Windows did not expand `tests/*.test.js
 ## Project persistence iteration
 
 HTTP save/overwrite/load regression confirms Unicode project names and manual gain/lock state survive. Concurrent writes initially failed on Windows rename; serialized project publication with unique synced temporary files resolves this (three repeated regression runs pass). Unsupported future schema versions are rejected to avoid lossy rewriting. Frontend loading now cancels playback/preparation, clears stale undo/output state, restores settings controls/evaluation visibility and enables Export for loaded mixes. Frontend syntax and existing tests pass; actual UI load flow still needs validation. Saving unanalysed materials, retaining project identity/overrides and full clip-model round-trip remain pending.
+
+## FFmpeg compatibility regression
+
+Windows CI 38063439023 reached the real audio suite and failed because current bundled FFmpeg removed `-filter_complex_script`. Both active rendering stages now use the supported file-valued `-/filter_complex` option. The complete Go suite passes with local FFmpeg 7.1 (`go test -count=1 ./...`); current CI verification is pending. This fixes the renderer rather than disabling audio tests or silently skipping failures.
