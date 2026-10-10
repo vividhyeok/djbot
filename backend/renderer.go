@@ -253,7 +253,7 @@ func RenderPreview(trackAPath, trackBPath string, spec TransitionSpec, cacheDir 
 }
 
 // RenderFinalMix renders the full mixset to MP3 + LRC using a single native FFmpeg filter_complex
-func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputPath, cacheDir string) (string, string, error) {
+func renderFinalMixLegacy(playlist []TrackEntry, transitions []TransitionSpec, outputPath, cacheDir string) (string, string, error) {
 	if len(playlist) < 2 {
 		return "", "", fmt.Errorf("need at least 2 tracks")
 	}

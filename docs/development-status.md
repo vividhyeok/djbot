@@ -37,3 +37,11 @@ Baseline and added Go tests pass on Windows with installed FFmpeg. No listening 
 ## Next implementation
 
 Replace legacy `RenderFinalMix`/`RenderPreview` internals with a shared renderer using `BuildRenderTimeline`. Apply effects locally to transition regions, preserve sample count, fail instead of skipping invalid tracks, avoid full-set memory canvas. Then connect frontend timeline/playback to the shared backend plan and render path. Verify actual exported PCM before claiming parity.
+
+## Renderer iteration
+
+`RenderFinalMix` now uses `render_pipeline.go` and the validated timeline. It stages independently decoded float-PCM clips and lets FFmpeg mix them, replacing the Go full-set canvas. Output is encoded to a sibling temporary file before rename; missing/failed sources abort instead of being skipped. Timings and LRC derive from the same timeline. Fade curves/custom amount and transition gains are sample-evaluated. One bounded RMS compensation replaces double normalization (not claimed as LUFS normalization).
+
+Actual FFmpeg WAV/MP3 regression: two 12-second synthetic tones, 1.05/.95 transition speeds, 2-second overlap; decoded duration within 2 ms, peak bounds checked, LRC cue at 8 seconds, input playlist unchanged, temporary files cleaned. Existing output preservation on missing source verified. Full Go suite and vet pass.
+
+Pending: transition EQ/filter/echo/type-specific envelopes and arbitrary automation are not yet implemented in the new renderer; legacy preview and frontend still use their old paths. This is an intermediate development branch, not a release-ready build. Next iteration must close these regressions and connect preview, then test multi-track/full app flows. Old renderer remains temporarily under `renderFinalMixLegacy` for reference and should be removed once replacement verified.
