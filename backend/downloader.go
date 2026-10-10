@@ -257,7 +257,7 @@ func DownloadYouTubePlaylist(url, outputDir string, maxTracks int) ([]Downloaded
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
-	outputTemplate := filepath.Join(outputDir, "%(title)s.%(ext)s")
+	outputTemplate := filepath.Join(outputDir, "%(title)s [%(id)s].%(ext)s")
 
 	// Common args shared across all retry stages.
 	//
@@ -280,6 +280,7 @@ func DownloadYouTubePlaylist(url, outputDir string, maxTracks int) ([]Downloaded
 		"--retries", "5",
 		"--fragment-retries", "5",
 		"--print", "after_move:filepath",
+		"--ffmpeg-location", ffmpegPath,
 	}
 	if maxTracks > 0 {
 		baseArgs = append(baseArgs, "--playlist-end", fmt.Sprintf("%d", maxTracks))
@@ -303,9 +304,6 @@ func DownloadYouTubePlaylist(url, outputDir string, maxTracks int) ([]Downloaded
 		// Stage 2: add sleep between requests to avoid rate-limiting
 		{label: "slow", extraArgs: []string{"--sleep-requests", "2", "--sleep-interval", "1"}},
 		// Stage 3-5: try browser cookies (handles login-required content)
-		{label: "chrome", extraArgs: []string{"--cookies-from-browser", "chrome"}},
-		{label: "edge", extraArgs: []string{"--cookies-from-browser", "edge"}},
-		{label: "firefox", extraArgs: []string{"--cookies-from-browser", "firefox"}},
 	}
 
 	var lastOut []byte

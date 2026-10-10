@@ -119,6 +119,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "parse form: "+err.Error(), 400)
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 
 	type fileResult struct {
 		Path     string `json:"path"`
@@ -132,19 +133,33 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
-			defer src.Close()
 
 			// Sanitize filename
 			name := filepath.Base(fh.Filename)
 			name = strings.ReplaceAll(name, "..", "_")
-			dst := filepath.Join(uploadsDir, name)
+			// Preserve the display name while giving every import its own material.
+			materialDir, err := os.MkdirTemp(uploadsDir, "import-")
+			if err != nil {
+				src.Close()
+				http.Error(w, "create import: "+err.Error(), 500)
+				return
+			}
+			dst := filepath.Join(materialDir, name)
 
 			out, err := os.Create(dst)
 			if err != nil {
-				continue
+				src.Close()
+				http.Error(w, "create audio: "+err.Error(), 500)
+				return
 			}
-			io.Copy(out, src)
-			out.Close()
+			_, copyErr := io.Copy(out, src)
+			closeErr := out.Close()
+			src.Close()
+			if copyErr != nil || closeErr != nil {
+				os.Remove(dst)
+				http.Error(w, "오디오 가져오기에 실패했습니다. 디스크 공간을 확인하세요.", 500)
+				return
+			}
 
 			absPath, _ := filepath.Abs(dst)
 			results = append(results, fileResult{Path: absPath, Filename: name})
