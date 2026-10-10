@@ -19,6 +19,9 @@ func ComputePlayBounds(playlist []TrackWithAnalysis, transitions []TransitionSpe
 }
 
 func defaultSettings(s MixSettings) MixSettings {
+	if s.TransitionBars != 8 && s.TransitionBars != 16 && s.TransitionBars != 32 {
+		s.TransitionBars = 16
+	}
 	if s.Style == "" {
 		s.Style = "auto"
 	}
@@ -187,7 +190,7 @@ func generateTransitionCandidatesWithSettings(a, b TrackAnalysis, typeW map[stri
 	if !reliable {
 		return []TransitionSpec{pacedSafeTransition(a, b, settings)}
 	}
-	types := []string{"crossfade", "bass_swap", "filter_fade", "echo_out", "cut", "drop", "long_blend", "mashup"}
+	types := []string{"crossfade", "bass_swap", "filter_fade", "long_blend"}
 	bars := []int{4, 8, 16, 32}
 	if settings.TransitionLength < .34 {
 		bars = []int{4, 8, 16}
@@ -204,26 +207,42 @@ func generateTransitionCandidatesWithSettings(a, b TrackAnalysis, typeW map[stri
 	}
 	exits := pacedExits(a, settings)
 	entries := anchors(b, true)
+	bars = []int{defaultSettings(settings).TransitionBars}
+	// Keep entry cues early enough for independent incoming and outgoing fades.
+	entries = nil
+	for _, cue := range b.Downbeats {
+		if cue >= 0 && cue <= math.Min(8, b.Duration*.05) && len(entries) < 5 {
+			entries = append(entries, cue)
+		}
+	}
+	if len(entries) == 0 {
+		entries = []float64{0}
+	}
 	var out []TransitionSpec
 	for _, x := range exits {
 		for _, y := range entries {
 			for _, nbar := range bars {
 				for _, typ := range types {
 					dur := float64(nbar) * 4 * 60 / target
-					if settings.ListeningMode == "quick" && dur*math.Max(spA, spB) > math.Min(a.Duration, b.Duration)*.18 {
-						continue
-					}
+					requested := dur
+					dur = math.Min(dur, transitionBudget(a, b, settings)/math.Max(spA, spB))
 					if nbar < 1 {
 						continue
 					}
 					if typ == "cut" {
 						dur = math.Min(dur, 4*60/target)
 					}
-					if x+dur*spA > a.Duration || y+dur*spB > b.Duration {
+					x = math.Min(x, a.Duration-dur*spA)
+					if x < dur*spA+math.Min(8, a.Duration*.05) || y+dur*spB > b.Duration {
 						continue
 					}
 					t := TransitionSpec{ID: fmt.Sprintf("%s-%d-%d-%d", typ, int(x*10), int(y*10), nbar), Type: typ, Name: transitionName(typ), Duration: dur, Bars: nbar, AOutTime: x, BInTime: y, TargetBPM: target, SpeedA: spA, SpeedB: spB, Curve: "equal_power", CurveAmount: .5, GainA: 1, GainB: 1, FilterCutoff: 400, FilterResonance: .7, EchoFeedback: .35, EchoMix: .25, PhraseAligned: nearAny(x, a.Phrases, 0.08), DownbeatAligned: nearAny(x, a.Downbeats, 0.08) && nearAny(y, b.Downbeats, 0.08)}
 					t.Automation = defaultAutomation(typ, dur, spA, spB)
+					t.Explanation = "선택한 마디 수로 두 곡을 겹칩니다."
+					if dur < requested-.01 {
+						t.Bars = 0
+						t.Explanation = "곡 길이와 앞뒤 전환의 충돌을 피하려고 전환을 줄였습니다. 실제 초 단위를 확인하세요."
+					}
 					t.Score = scoreTransitionWithSettings(a, b, t, settings)
 					if w := typeW[typ]; w > 0 {
 						t.Score.Total = clampF(t.Score.Total+(w-1)*2, 0, 100)

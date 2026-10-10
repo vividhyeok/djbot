@@ -21,12 +21,12 @@ func TestMatchedBeatsHaveEqualOutputPeriod(t *testing.T) {
 	}
 }
 
-func TestUncertainAndDistantTempoUseShortNaturalSpeedFade(t *testing.T) {
+func TestUncertainAndDistantTempoUseLongNaturalSpeedSequentialFade(t *testing.T) {
 	for _, bpm := range []float64{0, 95, 170} {
 		a, b := syntheticAnalysis("a", 120, .5), syntheticAnalysis("b", 120, .5)
 		b.BPM = bpm
 		cs := generateTransitionCandidates(a, b, nil, nil, 12)
-		if len(cs) != 1 || cs[0].SpeedA != 1 || cs[0].SpeedB != 1 || cs[0].Duration > 2 {
+		if len(cs) != 1 || cs[0].SpeedA != 1 || cs[0].SpeedB != 1 || cs[0].Duration < 16 || cs[0].Curve != "sequential" {
 			t.Fatalf("unsafe fallback: %+v", cs)
 		}
 	}

@@ -84,6 +84,9 @@ type ScoreBreakdown struct {
 	SetArc     float64 `json:"set_arc,omitempty"`
 }
 type TransitionSpec struct {
+	FadeOutSeconds  float64        `json:"fade_out_seconds,omitempty"`
+	FadeInSeconds   float64        `json:"fade_in_seconds,omitempty"`
+	Explanation     string         `json:"explanation,omitempty"`
 	ID              string         `json:"id,omitempty"`
 	Type            string         `json:"type"`
 	Name            string         `json:"name"`
@@ -153,6 +156,7 @@ type TrackWithAnalysis struct {
 	Analysis TrackAnalysis
 }
 type MixSettings struct {
+	TransitionBars         int       `json:"transition_bars,omitempty"`
 	ListeningMode          string    `json:"listening_mode,omitempty"`
 	Variation              int       `json:"variation,omitempty"`
 	Style                  string    `json:"style"`

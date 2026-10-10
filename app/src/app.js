@@ -18,7 +18,13 @@ async function init(){
   bind();renderLibrary();
 }
 function bind(){
-  $('durationSeconds').onchange=e=>{const duration=+e.target.value;if(Number.isFinite(duration)&&duration>0)editTransition(t=>{t.duration=duration;t.bars=+(duration*(t.target_bpm||120)/240).toFixed(2);t.automation=scaleAutomation(t.automation,duration)})};
+  $('durationSeconds').onchange=e=>{const duration=+e.target.value;if(Number.isFinite(duration)&&duration>0)editTransition(t=>resizeTransition(t,duration))};
+  $('regenerateTransitions').onclick=()=>autoMix('transitions');$('regenerateSelected').onclick=regenerateSelectedTransition;
+  $('listenBefore').onclick=()=>{const t=state.beforeEdits?.[state.selected];if(t)startLivePreview(t);else toast('아직 이 전환을 수정하지 않았습니다.')};
+  $('listenAfter').onclick=()=>startLivePreview();$('revertTransition').onclick=revertSelectedTransition;
+  document.querySelectorAll('[data-bars]').forEach(b=>b.onclick=()=>editBars(+b.dataset.bars));
+  for(const [id,key] of [['fadeOutSeconds','fade_out_seconds'],['fadeInSeconds','fade_in_seconds']])$(id).onchange=e=>editTransition(t=>t[key]=+e.target.value);
+  bindCueWave('cueWaveA','a_out_time',0);bindCueWave('cueWaveB','b_in_time',1);
   $('focusTransition').onclick=focusTransition;$('fitTimeline').onclick=()=>{state.zoom=1;renderTimeline();$('timeline').scrollLeft=0};$('auditionTransition').onclick=()=>{if(state.selected<0)selectTransition(0);startLivePreview()};
   $('importBtn').onclick=$('emptyImport').onclick=()=>$('fileInput').click();$('fileInput').onchange=e=>addFiles([...e.target.files]);
   const dz=$('dropZone');dz.ondragover=e=>{e.preventDefault();dz.classList.add('drag')};dz.ondragleave=()=>dz.classList.remove('drag');dz.ondrop=e=>{e.preventDefault();dz.classList.remove('drag');addFiles([...e.dataTransfer.files])};
@@ -52,19 +58,20 @@ function renderLibrary(){
 async function upload(){const pending=state.tracks.filter(t=>t.file&&!t.path);if(!pending.length)return;const form=new FormData();pending.forEach(t=>form.append('files',t.file,t.filename));const r=await fetch(api('/upload'),{method:'POST',body:form});if(!r.ok)throw new Error(await r.text());const d=await r.json();for(const f of d.files||[]){const t=state.tracks.find(x=>x.filename===f.filename);if(t)t.path=f.path}}
 async function downloadYouTube(){if(!state.port)return toast('데스크톱 앱에서 사용할 수 있습니다.','error');const url=$('ytUrl').value.trim();if(!url)return toast('YouTube URL을 입력하세요.','error');$('ytBtn').disabled=true;status('YouTube 오디오 가져오는 중');try{const d=await request('/download/youtube',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,max_tracks:50})});for(const f of d.files||[])if(!state.tracks.some(t=>t.path===f.path))state.tracks.push({filename:f.filename,path:f.path,file:null,analysis:null});renderLibrary();toast(`${d.files?.length||0}곡을 가져왔습니다.`,'ok');status('준비됨','ok')}catch(e){friendlyError('YouTube 가져오기',e)}finally{$('ytBtn').disabled=false}}
 async function analyze(){if(!state.port)return toast('분석은 데스크톱 앱에서 실행하세요.','error');await upload();const pending=state.tracks.filter(t=>t.path&&!t.analysis);if(!pending.length)return toast('모든 곡이 이미 분석되었습니다.','ok');$('analyzeBtn').disabled=true;status(`분석 중 0 / ${pending.length}`);try{const d=await request('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filepaths:pending.map(t=>t.path)})});for(const a of d.results||[]){if(!a?.filepath)continue;const t=state.tracks.find(x=>x.path===a.filepath);if(t)t.analysis=a}renderLibrary();if(d.errors?.length)toast(`${d.errors.length}곡을 분석하지 못했습니다. Details: ${d.errors[0]}`,'error');else toast('분석이 완료되었습니다.','ok');status('분석 완료','ok')}catch(e){friendlyError('분석',e)}finally{$('analyzeBtn').disabled=false}}
-function mixSettings(){return{listening_mode:$('listeningMode').value||'balanced',variation:state.generation||0,style:$('styleSelect').value,search_depth:$('depthSelect').value,preserve_order:$('preserveOrder').checked,transition_length:+$('transitionLength').value,phrase_priority:+$('phrasePriority').value,harmonic_priority:+$('harmonicPriority').value,vocal_overlap:.7,tempo_flexibility:.5,energy_movement:.5}}
-async function autoMix(){
+function mixSettings(){return{transition_bars:+$('transitionPreset').value||16,listening_mode:$('listeningMode').value||'balanced',variation:state.generation||0,style:$('styleSelect').value,search_depth:$('depthSelect').value,preserve_order:$('preserveOrder').checked,transition_length:+$('transitionLength').value,phrase_priority:+$('phrasePriority').value,harmonic_priority:+$('harmonicPriority').value,vocal_overlap:.7,tempo_flexibility:.5,energy_movement:.5}}
+async function autoMix(scope='all'){
   if(state.planning)return;state.planning=true;$('autoMixBtn').disabled=true;
   try{
     if(state.tracks.some(t=>!t.analysis))await analyze();
     const locked=state.plan?.selections||[],hasLocks=locked.some(t=>t.locked);
-    const tracks=hasLocks?state.plan.sorted_tracks:state.tracks.filter(t=>t.analysis).map(t=>t.analysis);
+    const keepOrder=hasLocks||scope==='transitions';
+    const tracks=keepOrder&&state.plan?state.plan.sorted_tracks:state.tracks.filter(t=>t.analysis).map(t=>t.analysis);
     if(tracks.length<2)return toast('분석된 곡이 2개 이상 필요합니다.','error');
-    status('새 믹스 구성 중');const settings=mixSettings();if(hasLocks)settings.preserve_order=true;
+    status('새 믹스 구성 중');const settings=mixSettings();if(keepOrder)settings.preserve_order=true;
     const d=await request('/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracks,settings,locked:hasLocks?locked:[]})});
     if(!d.plan?.selections?.length)throw new Error('전환을 생성하지 못했습니다.');
     stopPreview();listeningRequest?.abort();listeningRequest=null;$('audio').pause();$('audio').removeAttribute('src');$('audio').load();
-    state.plan=d.plan;state.generation=(state.generation||0)+1;state.history=[];state.future=[];state.selected=0;state.output=null;state.playhead=0;state.loop=false;
+    state.plan=d.plan;state.beforeEdits={};state.generation=(state.generation||0)+1;state.history=[];state.future=[];state.selected=0;state.output=null;state.playhead=0;state.loop=false;
     renderLibrary();renderTimeline();selectTransition(0);updateUndo();setPlaying(false);updateTransport();
     $('exportBtn').disabled=false;$('autoMixBtn').textContent='↻ 다시 Auto Mix';
     $('mixSummary').textContent=`${tracks.length}곡 · 버전 ${state.generation}`;
@@ -102,38 +109,57 @@ function renderTimeline(){
   $('timelineStage').onpointerdown=e=>{if(e.target.closest('.clip,.transition-zone,.timeline-tools'))return;const x=e.clientX-$('timelineStage').getBoundingClientRect().left-42;seekMix(clamp(x/pps,0,total))};updatePlayhead();
 }
 function waveformHTML(data,width){const count=clamp(Math.floor(width/3),30,500),step=Math.max(1,Math.floor(data.length/count));return data.filter((_,i)=>i%step===0).slice(0,count).map(v=>`<i style="height:${Math.max(2,v*110)}px"></i>`).join('')}
-function automationPaths(t){const amount=t.curve_amount??.5,p=curvePower(t.curve,amount);const pts=Array.from({length:21},(_,i)=>{const x=i/20,y=fadeAt(x,p,t.curve);return{x:x*100,y}});return{a:pts.map((q,i)=>`${i?'L':'M'}${q.x.toFixed(1)} ${(5+q.y*40).toFixed(1)}`).join(' '),b:pts.map((q,i)=>`${i?'L':'M'}${q.x.toFixed(1)} ${(45-q.y*40).toFixed(1)}`).join(' ')}}
+function automationPaths(t){const pts=Array.from({length:21},(_,i)=>({x:i/20*100,a:transitionEnvelope(t,false,i/20),b:transitionEnvelope(t,true,i/20)}));return{a:pts.map((q,i)=>`${i?'L':'M'}${q.x.toFixed(1)} ${(45-q.a*40).toFixed(1)}`).join(' '),b:pts.map((q,i)=>`${i?'L':'M'}${q.x.toFixed(1)} ${(45-q.b*40).toFixed(1)}`).join(' ')}}
 function curvePower(type,amount=.5){if(type==='sharp')return .45;if(type==='smooth')return 2.1;if(type==='custom')return .35+amount*3;return 1}
 function fadeAt(x,p,type){if(type==='equal_power')return Math.cos(x*Math.PI/2);return Math.pow(1-x,p)}
-function startTransitionDrag(e){const el=e.currentTarget,i=+el.dataset.transition,side=e.target.dataset.drag;if(!side)return;e.preventDefault();state.selected=i;renderInspector();checkpoint();const startX=e.clientX,orig=structuredClone(currentTransition()),pps=pixelsPerSecond(),startLeft=parseFloat(el.style.left),startWidth=parseFloat(el.style.width);el.setPointerCapture(e.pointerId);el.onpointermove=ev=>{const scale=ev.shiftKey?.2:1,delta=(ev.clientX-startX)/pps*scale,t=currentTransition();if(side==='left'){const val=snapTime(orig.a_out_time+delta,state.plan.sorted_tracks[i],ev.altKey);t.a_out_time=clamp(val,0,state.plan.sorted_tracks[i].duration-t.duration);el.style.left=`${startLeft+delta*pps}px`}else{const dur=Math.max(60/(t.target_bpm||120),orig.duration+delta);t.duration=dur;t.bars=Math.max(1,Math.round(dur*(t.target_bpm||120)/240));el.style.width=`${Math.max(16,startWidth+delta*pps)}px`}t.manual=true;showSnap(t.a_out_time,side==='left'?'A OUT':'Length');renderInspector();applyPreviewNow()};el.onpointerup=()=>{el.onpointermove=null;$('snapGuide').classList.add('hidden');renderTimeline()}}
+function startTransitionDrag(e){
+  const el=e.currentTarget,i=+el.dataset.transition,side=e.target.dataset.drag;if(!side)return;
+  e.preventDefault();state.selected=i;checkpoint();const original=structuredClone(currentTransition()),startX=e.clientX,pps=pixelsPerSecond();
+  el.setPointerCapture(e.pointerId);let error='';
+  el.onpointermove=ev=>{
+    const delta=(ev.clientX-startX)/pps*(ev.shiftKey?.2:1),draft=structuredClone(original);
+    if(side==='left')draft.a_out_time=snapTime(original.a_out_time+delta,state.plan.sorted_tracks[i],ev.altKey);
+    else resizeTransition(draft,Math.max(.05,original.duration+delta));
+    try{validateTransitionEdit(draft,i);draft.manual=true;state.plan.selections[i]=draft;error='';renderInspector();if(side==='right')el.style.width=`${Math.max(16,draft.duration*pps)}px`}
+    catch(err){error=err.message}
+  };
+  const finish=()=>{el.onpointermove=null;el.onpointerup=null;el.onpointercancel=null;renderTimeline();renderInspector();applyPreviewNow();if(error)toast(error,'error')};
+  el.onpointerup=finish;el.onpointercancel=()=>{state.plan.selections[i]=original;finish()};
+}
 function showSnap(time,label){const pps=pixelsPerSecond(),item=state.arrangement[state.selected];$('snapGuide').style.left=`${42+((item?.start||0)+time-(item?.sourceStart||0))*pps}px`;$('snapGuide').querySelector('span').textContent=label;$('snapGuide').classList.remove('hidden')}
-function snapTime(v,track,bypass=false){const mode=state.snap&&!bypass?$('snapSelect').value:'none',arr=mode==='phrase'?track.phrases:mode==='bar'?track.downbeats:mode==='beat'?track.beat_times:null;if(!arr?.length)return v;return arr.reduce((a,b)=>Math.abs(b-v)<Math.abs(a-v)?b:a,arr[0])}
+function snapTime(v,track,bypass=false){const mode=state.snap&&!bypass?$('snapSelect').value:'none',arr=mode==='phrase'?track.phrases:mode==='bar'?track.downbeats:mode==='beat'?track.beat_times:null;if(!arr?.length)return v;const nearest=arr.reduce((a,b)=>Math.abs(b-v)<Math.abs(a-v)?b:a,arr[0]),radius=mode==='phrase'?2:Math.min(1,30/(track.bpm||120));return Math.abs(nearest-v)<=radius?nearest:v}
 
 function selectTransition(i){if(!state.plan?.selections[i])return;state.selected=i;state.selectedTrack=-1;renderLibrary();renderTimeline();$('inspectorEmpty').classList.add('hidden');$('inspector').classList.remove('hidden');$('inspectorKind').textContent=`Transition ${i+1}`;renderInspector()}
 function showOverview(){$('inspectorEmpty').classList.remove('hidden');$('inspector').classList.add('hidden');$('inspectorKind').textContent=state.selectedTrack>=0?'Track':'Mix overview'}
-function renderInspector(){const t=currentTransition();if(!t)return;const defaults={curve:'equal_power',curve_amount:.5,gain_a:1,gain_b:1,filter_cutoff:400,filter_resonance:.7,echo_feedback:.35,echo_mix:.25};for(const[k,v]of Object.entries(defaults))if(t[k]===undefined)t[k]=v;$('transitionName').textContent=t.name||t.type;$('transitionType').value=t.type;$('durationSeconds').value=t.duration.toFixed(2);$('durationRange').value=t.bars||Math.max(1,Math.round(t.duration*(t.target_bpm||120)/240));$('durationBars').value=t.bars||+(t.duration*(t.target_bpm||120)/240).toFixed(2);$('aExit').value=(t.a_out_time||0).toFixed(2);$('bEntry').value=(t.b_in_time||0).toFixed(2);$('curveType').value=t.curve;$('gainA').value=t.gain_a;$('gainB').value=t.gain_b;$('filterCutoff').value=t.filter_cutoff;$('filterResonance').value=t.filter_resonance;$('echoFeedback').value=t.echo_feedback;$('echoMix').value=t.echo_mix;fillAutomationInputs(t);$('lockBtn').textContent=t.locked?'🔒 Locked':'🔓 Lock';$('lockBtn').setAttribute('aria-pressed',String(!!t.locked));$('loopBtn').setAttribute('aria-pressed',String(state.loop));$('filterParams').classList.toggle('hidden',t.type!=='filter_fade'&&t.type!=='drop');$('echoParams').classList.toggle('hidden',t.type!=='echo_out');drawCurve();renderAlternatives();if(state.evaluationMode){const s=t.score||{};$('scoreGrid').innerHTML=['Beat','Downbeat','Phrase','Harmony','Tempo','Energy','Vocal'].map(k=>`<span>${k}</span><b>${Math.round(s[k.toLowerCase()]||0)}</b>`).join('')}}
+function renderInspector(){const t=currentTransition();if(!t)return;const defaults={curve:'equal_power',curve_amount:.5,gain_a:1,gain_b:1,filter_cutoff:400,filter_resonance:.7,echo_feedback:.35,echo_mix:.25};for(const[k,v]of Object.entries(defaults))if(t[k]===undefined)t[k]=v;$('transitionName').textContent=t.name||t.type;$('transitionType').value=t.type;$('durationSeconds').value=t.duration.toFixed(2);$('durationRange').value=t.bars||Math.max(1,Math.round(t.duration*(t.target_bpm||120)/240));$('durationBars').value=t.bars||+(t.duration*(t.target_bpm||120)/240).toFixed(2);$('aExit').value=(t.a_out_time||0).toFixed(2);$('bEntry').value=(t.b_in_time||0).toFixed(2);$('curveType').value=t.curve;$('gainA').value=t.gain_a;$('gainB').value=t.gain_b;$('filterCutoff').value=t.filter_cutoff;$('filterResonance').value=t.filter_resonance;$('echoFeedback').value=t.echo_feedback;$('echoMix').value=t.echo_mix;fillAutomationInputs(t);$('lockBtn').textContent=t.locked?'🔒 Locked':'🔓 Lock';$('lockBtn').setAttribute('aria-pressed',String(!!t.locked));$('loopBtn').setAttribute('aria-pressed',String(state.loop));$('filterParams').classList.toggle('hidden',t.type!=='filter_fade'&&t.type!=='drop');$('echoParams').classList.add('hidden');renderEditingDetails();drawCurve();renderAlternatives();if(state.evaluationMode){const s=t.score||{};$('scoreGrid').innerHTML=['Beat','Downbeat','Phrase','Harmony','Tempo','Energy','Vocal'].map(k=>`<span>${k}</span><b>${Math.round(s[k.toLowerCase()]||0)}</b>`).join('')}}
 function fillAutomationInputs(t){const last=(arr,fallback)=>arr?.length?arr[arr.length-1].value:fallback;$('lowA').value=last(t.automation?.low_a,1);$('lowB').value=last(t.automation?.low_b,1);$('filterA').value=last(t.automation?.filter_a,1);$('filterB').value=last(t.automation?.filter_b,1)}
 function renderAlternatives(){const t=currentTransition(),alts=state.plan.alternatives?.[state.selected]||[t];$('alternatives').innerHTML=alts.map((a,i)=>`<button class="alternative ${a.id===t.id?'active':''}" data-alt="${i}"><span>${i===0?'Recommended':`Alternative ${String.fromCharCode(64+i)}`}</span><b>${state.evaluationMode?Math.round(a.score?.total||0):a.bars+' bars'}</b><span>Preview</span></button>`).join('');document.querySelectorAll('[data-alt]').forEach(b=>b.onclick=()=>applyAlternative(alts[+b.dataset.alt]))}
-function drawCurve(){const t=currentTransition(),p=curvePower(t.curve,t.curve_amount),pts=Array.from({length:41},(_,i)=>{const x=i/40,y=fadeAt(x,p,t.curve);return{x:x*260,y}});$('curveA').setAttribute('d',pts.map((q,i)=>`${i?'L':'M'}${q.x} ${10+q.y*80}`).join(' '));$('curveB').setAttribute('d',pts.map((q,i)=>`${i?'L':'M'}${q.x} ${90-q.y*80}`).join(' '));$('curveHandle').setAttribute('cy',String(15+(t.curve_amount??.5)*70))}
+function drawCurve(){const t=currentTransition(),pts=Array.from({length:41},(_,i)=>({x:i/40*260,a:transitionEnvelope(t,false,i/40),b:transitionEnvelope(t,true,i/40)}));$('curveA').setAttribute('d',pts.map((q,i)=>`${i?'L':'M'}${q.x} ${90-q.a*80}`).join(' '));$('curveB').setAttribute('d',pts.map((q,i)=>`${i?'L':'M'}${q.x} ${90-q.b*80}`).join(' '));$('curveHandle').setAttribute('cy',String(15+(t.curve_amount??.5)*70))}
 function bindCurveHandle(){const svg=$('curveSvg'),h=$('curveHandle');h.onpointerdown=e=>{checkpoint();h.setPointerCapture(e.pointerId);const start=e.clientY,orig=currentTransition().curve_amount??.5;h.onpointermove=ev=>{const scale=ev.shiftKey?.2:1;currentTransition().curve='custom';currentTransition().curve_amount=clamp(orig+(ev.clientY-start)/70*scale,0,1);currentTransition().manual=true;$('curveType').value='custom';drawCurve();renderTimeline();applyPreviewNow()};h.onpointerup=()=>h.onpointermove=null}}
-function editTransition(fn){if(!currentTransition())return;checkpoint();fn(currentTransition());currentTransition().manual=true;renderTimeline();renderInspector();applyPreviewNow()}
-function editBars(bars){if(!bars||bars<1)return;editTransition(t=>{t.bars=bars;t.duration=bars*4*60/(t.target_bpm||120);t.automation=scaleAutomation(t.automation,t.duration)})}
+function editTransition(fn){
+  const old=currentTransition();if(!old)return;const draft=structuredClone(old);
+  try{fn(draft);validateTransitionEdit(draft,state.selected)}catch(e){toast(e.message,'error');renderInspector();return}
+  state.beforeEdits??={};state.beforeEdits[state.selected]??=structuredClone(old);
+  checkpoint();draft.manual=true;state.plan.selections[state.selected]=draft;renderTimeline();renderInspector();applyPreviewNow();
+}
+function resizeTransition(t,duration){const ratio=duration/t.duration;t.duration=duration;t.bars=Math.round(duration*(t.target_bpm||120)/240);t.automation=scaleAutomation(t.automation,duration);if(t.fade_out_seconds)t.fade_out_seconds*=ratio;if(t.fade_in_seconds)t.fade_in_seconds*=ratio}
+function editBars(bars){if(!Number.isInteger(bars)||bars<1)return;editTransition(t=>{resizeTransition(t,bars*240/(t.target_bpm||120));t.bars=bars})}
 function editTime(key,v,e){if(!Number.isFinite(v))return;const idx=state.selected+(key==='b_in_time'?1:0),track=state.plan.sorted_tracks[idx];editTransition(t=>t[key]=clamp(snapTime(v,track,e.altKey),0,track.duration))}
 function applyTypeDefaults(t){t.automation=t.automation||{};if(t.type==='bass_swap'){t.automation.low_a=[{time:0,value:1},{time:t.duration*.52,value:0}];t.automation.low_b=[{time:0,value:0},{time:t.duration*.52,value:1}]}else if(t.type==='filter_fade'){t.automation.filter_a=[{time:0,value:1},{time:t.duration,value:0}];t.automation.filter_b=[{time:0,value:.2},{time:t.duration,value:1}]}}
 function scaleAutomation(a={},dur){const out=structuredClone(a);for(const arr of Object.values(out))if(Array.isArray(arr)&&arr.length){const old=Math.max(...arr.map(p=>p.time),1);arr.forEach(p=>p.time=p.time/old*dur)}return out}
 function bindLiveRange(id,key,fallback){$(id).onpointerdown=checkpoint;$(id).oninput=e=>{const t=currentTransition();if(!t)return;t[key]=Number.isFinite(+e.target.value)?+e.target.value:fallback;t.manual=true;applyPreviewNow();if(id.startsWith('gain'))renderTimeline()}}
 function bindAutomationRange(id,key){$(id).onpointerdown=checkpoint;$(id).oninput=e=>{const t=currentTransition();if(!t)return;t.automation=t.automation||{};t.automation[key]=[{time:0,value:+e.target.value},{time:t.duration,value:+e.target.value}];t.manual=true;applyPreviewNow();renderTimeline()}}
-function checkpoint(){if(!state.plan)return;const snap=JSON.stringify(state.plan.selections);if(state.history.at(-1)!==snap)state.history.push(snap);if(state.history.length>80)state.history.shift();state.future=[];updateUndo()}
+function checkpoint(){if(!state.plan)return;state.beforeEdits??={};if(state.selected>=0)state.beforeEdits[state.selected]??=structuredClone(currentTransition());const snap=JSON.stringify(state.plan.selections);if(state.history.at(-1)!==snap)state.history.push(snap);if(state.history.length>80)state.history.shift();state.future=[];updateUndo()}
 function undo(){if(!state.history.length||!state.plan)return;state.future.push(JSON.stringify(state.plan.selections));state.plan.selections=JSON.parse(state.history.pop());renderTimeline();if(state.selected>=0)renderInspector();applyPreviewNow();updateUndo()}
 function redo(){if(!state.future.length||!state.plan)return;state.history.push(JSON.stringify(state.plan.selections));state.plan.selections=JSON.parse(state.future.pop());renderTimeline();if(state.selected>=0)renderInspector();applyPreviewNow();updateUndo()}
 function updateUndo(){$('undoBtn').disabled=!state.history.length;$('redoBtn').disabled=!state.future.length}
-function applyAlternative(a){checkpoint();state.plan.selections[state.selected]=structuredClone(a);renderTimeline();renderInspector();if(state.loop)startLivePreview()}
+function applyAlternative(a){editTransition(t=>replaceTransitionContents(t,a))}
 async function regenerateAlternatives(){if(!state.port)return;const d=await request('/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracks:state.plan.sorted_tracks,settings:{...mixSettings(),preserve_order:true}})});state.plan.alternatives[state.selected]=d.plan.alternatives[state.selected];renderInspector();toast('새 전환 후보를 준비했습니다.','ok')}
 
 function sourceFor(path){return convertFileSrc(path)}
 function setupMedia(path){const el=new Audio(sourceFor(path));el.preload='auto';const ctx=state.preview?.ctx||new AudioContext(),src=ctx.createMediaElementSource(el),low=ctx.createBiquadFilter(),filter=ctx.createBiquadFilter(),gain=ctx.createGain();low.type='lowshelf';low.frequency.value=220;filter.type='lowpass';src.connect(low).connect(filter).connect(gain).connect(ctx.destination);return{el,src,low,filter,gain}}
-async function startLivePreview(){
-  stopPreview();const i=state.selected,t=currentTransition();if(i<0||!t||!state.port)return;
+async function startLivePreview(override){
+  stopPreview();const i=state.selected,t=override||currentTransition();if(i<0||!t||!state.port)return;
   $('audio').pause();
   const p={el:null,timer:0,controller:new AbortController(),index:i};state.preview=p;
   status('출력과 동일한 전환 미리듣기 준비 중');setPlaying(true);
@@ -236,10 +262,10 @@ async function loadProject(){
     if(p.transitions.length&&(planTracks.some(t=>!t?.analysis)||p.transitions.length!==planTracks.length-1))throw new Error('invalid project transitions');
     stopPreview();listeningRequest?.abort();listeningRequest=null;$('audio').pause();$('audio').removeAttribute('src');$('audio').load();
     state.output=null;state.playhead=0;state.history=[];state.future=[];state.loop=false;state.selectedTrack=-1;
-    state.projectData=p;state.projectName=p.name;$('projectName').textContent=p.name;state.tracks=tracks;
+    state.projectData=p;state.beforeEdits={};state.projectName=p.name;$('projectName').textContent=p.name;state.tracks=tracks;
     state.plan=p.transitions.length?{sorted_tracks:planTracks.map(t=>t.analysis),selections:p.transitions,alternatives:p.transitions.map(t=>[t]),score:{},evaluated:0,settings:p.settings}:null;
     const settings=p.settings||{};
-    for(const [id,key] of Object.entries({listeningMode:'listening_mode',styleSelect:'style',depthSelect:'search_depth',transitionLength:'transition_length',phrasePriority:'phrase_priority',harmonicPriority:'harmonic_priority'})){if(settings[key]!==undefined)$(id).value=settings[key]}
+    for(const [id,key] of Object.entries({transitionPreset:'transition_bars',listeningMode:'listening_mode',styleSelect:'style',depthSelect:'search_depth',transitionLength:'transition_length',phrasePriority:'phrase_priority',harmonicPriority:'harmonic_priority'})){if(settings[key]!==undefined)$(id).value=settings[key]}
     $('preserveOrder').checked=!!settings.preserve_order;
     state.evaluationMode=!!p.evaluation_mode;$('evaluationMode').checked=state.evaluationMode;$('evaluationPanel').classList.toggle('hidden',!state.evaluationMode);
     state.selected=state.plan?0:-1;$('exportBtn').disabled=!state.plan;setPlaying(false);updateUndo();renderLibrary();renderTimeline();
@@ -247,4 +273,58 @@ async function loadProject(){
   }catch(e){friendlyError('프로젝트 열기',e)}
 }
 function friendlyError(action,e){const raw=String(e?.message||e),hint=/ffmpeg/i.test(raw)?'FFmpeg 번들을 확인하세요.':/yt-dlp/i.test(raw)?'네트워크 연결 후 다시 시도하세요.':/decode|unsupported|invalid/i.test(raw)?'지원되는 오디오 파일인지 확인하세요.':'잠시 후 다시 시도하고 계속되면 Details를 확인하세요.';toast(`${action} 실패 — ${hint} (${raw.slice(0,180)})`,'error');status(`${action} 실패`,'err')}
+function replaceTransitionContents(target,source){for(const key of Object.keys(target))delete target[key];Object.assign(target,structuredClone(source))}
+function validateTransitionEdit(t,i){
+  const a=state.plan.sorted_tracks[i],b=state.plan.sorted_tracks[i+1],prev=state.plan.selections[i-1],next=state.plan.selections[i+1];
+  const minA=prev?prev.b_in_time+prev.duration*(prev.speed_b||1):0,maxB=next?next.a_out_time:b.duration;
+  const sa=t.speed_a||1,sb=t.speed_b||1,maxDuration=Math.min((a.duration-minA)/sa,maxB/sb);
+  if(!Number.isFinite(t.duration)||t.duration<=0||t.duration>maxDuration+.001)throw new Error(`앞뒤 전환과 겹치지 않는 최대 길이는 ${maxDuration.toFixed(1)}초입니다. 곡 감상 길이를 늘리거나 다른 시작점을 선택하세요.`);
+  if(!Number.isFinite(t.a_out_time)||!Number.isFinite(t.b_in_time))throw new Error('시작 위치를 숫자로 입력하세요.');
+  t.a_out_time=clamp(t.a_out_time,minA,a.duration-t.duration*sa);t.b_in_time=clamp(t.b_in_time,0,maxB-t.duration*sb);
+  for(const k of ['fade_out_seconds','fade_in_seconds'])if(t[k]!==undefined&&(!Number.isFinite(t[k])||t[k]<0||t[k]>t.duration))throw new Error('각 페이드 길이는 전체 전환 길이 이내여야 합니다.');
+  t.bars=Math.round(t.bars||0);
+}
+function renderEditingDetails(){
+  const t=currentTransition();if(!t)return;
+  const cap=t.curve==='sequential'?t.duration/2:t.duration;
+  for(const [id,k] of [['fadeOutSeconds','fade_out_seconds'],['fadeInSeconds','fade_in_seconds']]){$(id).max=t.duration;$(id).value=Math.min(t[k]||t.duration,cap).toFixed(2)}
+  $('transitionExplanation').textContent=t.manual?'직접 편집한 전환입니다. 재생 중 수정하면 해당 전환을 다시 준비합니다.':t.explanation||'두 곡의 시작 위치와 겹치는 시간을 조절하세요.';
+  for(const [id,key,offset] of [['cueWaveA','a_out_time',0],['cueWaveB','b_in_time',1]]){
+    const a=state.plan.sorted_tracks[state.selected+offset],svg=$(id),data=a.waveform||[];
+    const wave=Array.from({length:150},(_,i)=>{const v=data[Math.floor(i*data.length/150)]||0,h=Math.max(1,v*50);return `<rect x="${i*2}" y="${35-h/2}" width="1.7" height="${h}"/>`}).join('');
+    const x=t[key]/a.duration*300,w=t.duration*(offset?(t.speed_b||1):(t.speed_a||1))/a.duration*300;
+    svg.innerHTML=`<g fill="${offset?'#75cbb6':'#78b9ea'}">${wave}</g><rect x="${x}" y="0" width="${w}" height="70" fill="#f0a45d33"/><line x1="${x}" x2="${x}" y1="0" y2="70" stroke="#ffe5aa" stroke-width="3"/>`;
+    svg.setAttribute('aria-valuemin','0');svg.setAttribute('aria-valuemax',a.duration);svg.setAttribute('aria-valuenow',t[key]);svg.setAttribute('aria-valuetext',`${filename(a.filepath)} ${t[key].toFixed(1)}초`);
+  }
+}
+function bindCueWave(id,key,offset){
+  const svg=$(id);svg.onpointerdown=e=>{
+    if(!currentTransition())return;e.preventDefault();svg.setPointerCapture(e.pointerId);
+    const track=state.plan.sorted_tracks[state.selected+offset],rect=svg.getBoundingClientRect();let value=currentTransition()[key];
+    const move=ev=>{value=clamp((ev.clientX-rect.left)/rect.width,0,1)*track.duration;const line=svg.querySelector('line');if(line){line.setAttribute('x1',value/track.duration*300);line.setAttribute('x2',value/track.duration*300)}$(offset?'bEntry':'aExit').value=value.toFixed(2)};
+    move(e);svg.onpointermove=move;svg.onpointerup=ev=>{svg.onpointermove=null;svg.onpointerup=null;editTime(key,value,ev)};svg.onpointercancel=()=>{svg.onpointermove=null;svg.onpointerup=null;renderEditingDetails()};
+  };
+  svg.onkeydown=e=>{if(!currentTransition()||!['ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();editTime(key,currentTransition()[key]+(e.key==='ArrowRight'?1:-1)*(e.shiftKey?.1:1),{altKey:true})};
+}
+async function regenerateSelectedTransition(){
+  const i=state.selected,t=currentTransition();if(!t||!state.port)return;
+  if(t.locked)return toast('이 전환은 잠겨 있습니다. 잠금을 풀고 다시 생성하세요.');
+  if(state.regenerating)return;state.regenerating=true;$('regenerateSelected').disabled=true;
+  const plan=state.plan;
+  try{
+    const d=await request('/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracks:plan.sorted_tracks.slice(i,i+2),settings:{...mixSettings(),preserve_order:true,variation:(state.pairVariation=(state.pairVariation||0)+1)}})});
+    if(state.plan!==plan||state.selected!==i)return;
+    const replacement=d.plan?.selections?.[0];if(!replacement)throw new Error('전환 후보가 없습니다.');
+    validateTransitionEdit(replacement,i);state.beforeEdits??={};state.beforeEdits[i]??=structuredClone(t);checkpoint();plan.selections[i]=replacement;plan.alternatives[i]=d.plan.alternatives[0];
+    renderTimeline();renderInspector();applyPreviewNow();toast('다른 곡과 전환은 유지했습니다. 수정 후 듣기로 확인하세요.','ok');
+  }catch(e){friendlyError('선택 전환 재생성',e)}finally{state.regenerating=false;$('regenerateSelected').disabled=false}
+}
+function revertSelectedTransition(){const old=state.beforeEdits?.[state.selected];if(!old)return toast('되돌릴 편집이 없습니다.');editTransition(t=>replaceTransitionContents(t,old))}
+function transitionEnvelope(t,incoming,x){
+  let d=(incoming?t.fade_in_seconds:t.fade_out_seconds)||t.duration;
+  if(t.curve==='sequential')d=Math.min(d,t.duration/2);
+  const time=x*t.duration,start=incoming?t.duration-d:0,u=clamp((time-start)/d,0,1),p=curvePower(t.curve,t.curve_amount);
+  if(['equal_power','sequential',''].includes(t.curve||''))return incoming?Math.sin(u*Math.PI/2):Math.cos(u*Math.PI/2);
+  return Math.pow(incoming?u:1-u,p);
+}
 init();

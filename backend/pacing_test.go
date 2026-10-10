@@ -11,7 +11,7 @@ func TestPacingRetainsDifferentAmountsWithoutRelyingOnTempo(t *testing.T) {
 	q := pacedSafeTransition(a, b, MixSettings{ListeningMode: "quick"})
 	m := pacedSafeTransition(a, b, MixSettings{ListeningMode: "balanced"})
 	l := pacedSafeTransition(a, b, MixSettings{ListeningMode: "long"})
-	if !(q.AOutTime < m.AOutTime && m.AOutTime < l.AOutTime && l.AOutTime+l.Duration < a.Duration) {
+	if !(q.AOutTime < m.AOutTime && m.AOutTime < l.AOutTime && l.AOutTime+l.Duration <= a.Duration) {
 		t.Fatalf("pacing cues %v %v %v", q, m, l)
 	}
 	if q.SpeedA != 1 || q.SpeedB != 1 {

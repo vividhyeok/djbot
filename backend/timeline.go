@@ -29,6 +29,11 @@ func BuildRenderTimeline(tracks []TrackEntry, transitions []TransitionSpec) ([]R
 		return nil, fmt.Errorf("each adjacent pair needs one transition")
 	}
 	for i, t := range transitions {
+		for _, fade := range []float64{t.FadeInSeconds, t.FadeOutSeconds} {
+			if !finite(fade) || fade < 0 || fade > t.Duration {
+				return nil, fmt.Errorf("transition %d: fade length must be within overlap", i+1)
+			}
+		}
 		if !finite(t.Duration) || t.Duration <= 0 || !finite(t.AOutTime) || !finite(t.BInTime) || t.AOutTime < 0 || t.BInTime < 0 {
 			return nil, fmt.Errorf("transition %d: invalid cue or duration", i+1)
 		}

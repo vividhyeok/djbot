@@ -152,7 +152,21 @@ func RenderFinalMix(playlist []TrackEntry, transitions []TransitionSpec, outputP
 // Sample-evaluated gains avoid volume-frame stair steps. Gain edits are scoped
 // to the transition; the natural-speed body retains its normalized level.
 func fadeExpression(t TransitionSpec, incoming bool, start float64) string {
-	x := fmt.Sprintf("clip((t-%.9f)/%.9f,0,1)", start, t.Duration)
+	duration := t.FadeOutSeconds
+	if incoming {
+		duration = t.FadeInSeconds
+	}
+	if duration <= 0 {
+		duration = t.Duration
+	}
+	if t.Curve == "sequential" {
+		duration = math.Min(duration, t.Duration/2)
+	}
+	fadeStart := start
+	if incoming {
+		fadeStart += t.Duration - duration
+	}
+	x := fmt.Sprintf("clip((t-%.9f)/%.9f,0,1)", fadeStart, duration)
 	power := 1.0
 	switch t.Curve {
 	case "sharp":
@@ -166,7 +180,7 @@ func fadeExpression(t TransitionSpec, incoming bool, start float64) string {
 	if incoming {
 		shape = fmt.Sprintf("pow(%s,%.6f)", x, power)
 	}
-	if t.Curve == "equal_power" || t.Curve == "" {
+	if t.Curve == "equal_power" || t.Curve == "" || t.Curve == "sequential" {
 		shape = "cos((" + x + ")*PI/2)"
 		if incoming {
 			shape = "sin((" + x + ")*PI/2)"
