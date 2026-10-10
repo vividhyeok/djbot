@@ -9,10 +9,12 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 var safeProjectName = regexp.MustCompile(`[^\p{L}\p{N}._ -]+`)
+var projectWriteMu sync.Mutex
 
 func projectPath(name string) string {
 	name = strings.TrimSuffix(filepath.Base(name), ".djbot")
@@ -32,6 +34,10 @@ func handleProjectSave(w http.ResponseWriter, r *http.Request) {
 	if p.SchemaVersion == 0 {
 		p.SchemaVersion = 2
 	}
+	if p.SchemaVersion < 1 || p.SchemaVersion > 2 {
+		http.Error(w, "unsupported project version", http.StatusBadRequest)
+		return
+	}
 	if p.ID == "" {
 		p.ID = randHex(8)
 	}
@@ -46,10 +52,7 @@ func handleProjectSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := projectPath(p.Name)
-	tmp := path + ".tmp"
-	if err = os.WriteFile(tmp, data, 0644); err == nil {
-		err = os.Rename(tmp, path)
-	}
+	err = writeProjectFile(path, data)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -66,12 +69,35 @@ func handleProjectLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var p MixProject
-	if json.Unmarshal(data, &p) != nil || p.SchemaVersion < 1 {
+	if json.Unmarshal(data, &p) != nil || p.SchemaVersion < 1 || p.SchemaVersion > 2 {
 		http.Error(w, "invalid project", http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+func writeProjectFile(path string, data []byte) error {
+	projectWriteMu.Lock()
+	defer projectWriteMu.Unlock()
+	f, err := os.CreateTemp(filepath.Dir(path), ".project-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func handleProjectList(w http.ResponseWriter, _ *http.Request) {

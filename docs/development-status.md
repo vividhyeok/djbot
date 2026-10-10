@@ -73,3 +73,7 @@ Local repackaging finished successfully (session 41256); installer predates this
 ## Multi-track regression and CI repair
 
 CI 38063234612 failed because Node 20 on Windows did not expand `tests/*.test.js`; changed test command to Node's built-in discovery (`node --test`). Added generated-plan tests for 2/3/12 tracks at .4/3/12/180 seconds. They exposed conflicting middle-track cues for short material: fallback exit anchor was zero. Fixed fallback to retain at least 75% of the track before exit. All combinations now satisfy the real timeline validator. An actual 12-track, 3-second synthetic-tone WAV render verifies duration (<2 ms drift), finite/unclipped samples and audible content in each track region. This does not establish musical quality on real music. Frontend tests and full Go suite pass locally.
+
+## Project persistence iteration
+
+HTTP save/overwrite/load regression confirms Unicode project names and manual gain/lock state survive. Concurrent writes initially failed on Windows rename; serialized project publication with unique synced temporary files resolves this (three repeated regression runs pass). Unsupported future schema versions are rejected to avoid lossy rewriting. Frontend loading now cancels playback/preparation, clears stale undo/output state, restores settings controls/evaluation visibility and enables Export for loaded mixes. Frontend syntax and existing tests pass; actual UI load flow still needs validation. Saving unanalysed materials, retaining project identity/overrides and full clip-model round-trip remain pending.
