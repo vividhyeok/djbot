@@ -81,3 +81,7 @@ HTTP save/overwrite/load regression confirms Unicode project names and manual ga
 ## FFmpeg compatibility regression
 
 Windows CI 38063439023 reached the real audio suite and failed because current bundled FFmpeg removed `-filter_complex_script`. Both active rendering stages now use the supported file-valued `-/filter_complex` option. The complete Go suite passes with local FFmpeg 7.1 (`go test -count=1 ./...`); current CI verification is pending. This fixes the renderer rather than disabling audio tests or silently skipping failures.
+
+## Imported material persistence
+
+Save now uploads pending source files before serialization, retains unanalysed library tracks (including those outside the current plan), prevents concurrent frontend saves, and retains returned project ID/creation date. Existing material IDs and analysis overrides survive subsequent saves; newly generated IDs avoid collisions. Loading derives planned track order from clip material references rather than treating unanalysed library entries as planned tracks. Six frontend tests and syntax checks pass, including three new persistence regressions. Full arbitrary clip editing/stem model round-trip remains unresolved; this is not a claim that every v2 document can be edited losslessly. Windows CI 38064396162 remains in progress.

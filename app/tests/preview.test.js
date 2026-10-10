@@ -35,3 +35,28 @@ test('cancelling whole mix preparation cannot start late playback',async()=>{
   assert.equal(vm.runInContext('state.output',h.ctx),null);
   assert.equal(vm.runInContext('listeningRequest',h.ctx),null);
 });
+
+test('saving before analysis preserves imported sources and project identity',()=>{
+  const h=harness();
+  vm.runInContext(`state.plan=null;state.tracks=[{path:'new.wav',analysis:null},{path:'old.wav',analysis:null}];
+    state.projectData={id:'existing',created_at:'2026-01-01',materials:[{id:'material-0',kind:'track',source_path:'old.wav'}],analysis_overrides:[{material_id:'material-0',downbeats:[1]}]};`,h.ctx);
+  const p=JSON.parse(vm.runInContext('JSON.stringify(projectDocument())',h.ctx));
+  assert.equal(p.id,'existing');assert.equal(p.created_at,'2026-01-01');
+  assert.deepEqual(p.materials.map(m=>m.source_path),['new.wav','old.wav']);
+  assert.equal(p.materials[1].id,'material-0');assert.notEqual(p.materials[0].id,'material-0');
+  assert.equal(p.analysis_overrides[0].material_id,p.materials[1].id);
+});
+
+test('saving a plan also retains library tracks not yet analysed',()=>{
+  const h=harness();
+  vm.runInContext(`state.plan={sorted_tracks:[{filepath:'a',duration:20},{filepath:'b',duration:20}],selections:[{a_out_time:15,b_in_time:0,duration:2}],settings:{}};
+    state.tracks=[{path:'a'},{path:'b'},{path:'pending.wav',analysis:null}];`,h.ctx);
+  const p=JSON.parse(vm.runInContext('JSON.stringify(projectDocument())',h.ctx));
+  assert.equal(p.materials.length,3);assert.equal(p.clips.length,2);
+  assert.equal(p.materials[2].source_path,'pending.wav');
+});
+
+test('serialization rejects sources which have not been uploaded',()=>{
+  const h=harness();vm.runInContext('state.plan=null;state.tracks=[{path:null}]',h.ctx);
+  assert.throws(()=>vm.runInContext('projectDocument()',h.ctx),/파일/);
+});

@@ -146,8 +146,34 @@ function updateTransport(){const a=$('audio'),cur=state.preview?state.playhead:(
 
 function playlist(){return state.plan.sorted_tracks.map((t,i)=>({filepath:t.filepath,filename:filename(t.filepath),duration:t.duration,bpm:t.bpm,loudness_db:t.loudness_db,play_start:i?state.plan.selections[i-1].b_in_time:0,play_end:state.plan.selections[i]?Math.min(t.duration,state.plan.selections[i].a_out_time+state.plan.selections[i].duration):t.duration}))}
 async function exportMix(){if(!state.port)return toast('Export는 데스크톱 앱에서 실행하세요.','error');const format=$('exportFormat').value,dir=await invoke('get_output_dir'),safe=($('exportFilename').value||'DJBOT Mix').replace(/[<>:"/\\|?*]/g,'_'),path=`${dir}\\${safe}.${format}`;$('renderProgress').classList.remove('hidden');$('exportConfirm').disabled=true;status('고품질 믹스 렌더링 중');try{const d=await request('/render/mix',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({playlist:playlist(),transitions:state.plan.selections,output_path:path,format})});if(d.error)throw new Error(d.error);const out=d.mp3_path||d.wav_path;state.output=out;$('audio').src=sourceFor(out);$('exportModal').classList.add('hidden');toast(`완료: ${filename(out)}`,'ok');status('Export 완료','ok');try{await tauri.opener.revealItemInDir(out)}catch{}}catch(e){friendlyError('Export',e)}finally{$('renderProgress').classList.add('hidden');$('exportConfirm').disabled=false}}
-function projectDocument(){state.arrangement=buildArrangement();const materials=state.plan?state.plan.sorted_tracks.map((a,i)=>({id:`material-${i}`,kind:'track',source_path:a.filepath,analysis:a})):state.tracks.filter(t=>t.analysis).map((t,i)=>({id:`material-${i}`,kind:'track',source_path:t.path,analysis:t.analysis}));const clips=state.arrangement.map(x=>({id:`clip-${x.index}`,material_id:`material-${x.index}`,lane:x.lane,timeline_start:x.start,source_start:x.sourceStart,source_end:x.sourceEnd,gain:1,muted:false}));return{schema_version:2,name:state.projectName,materials,clips,transitions:state.plan?.selections||[],settings:state.plan?.settings||mixSettings(),analysis_overrides:[],evaluation_mode:state.evaluationMode}}
-async function saveProject(){if(!state.port)return toast('프로젝트 저장은 데스크톱 앱에서 실행하세요.');if(!state.tracks.length&&!state.plan)return toast('저장할 프로젝트가 없습니다.','error');if(state.projectName==='Untitled Mix'){const n=prompt('프로젝트 이름','My Mix');if(!n)return;state.projectName=n;$('projectName').textContent=n}try{const d=await request('/project/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(projectDocument())});toast(`저장됨: ${filename(d.path)}`,'ok')}catch(e){friendlyError('프로젝트 저장',e)}}
+function projectDocument(){
+  state.arrangement=buildArrangement();
+  const previous=state.projectData||{};
+  const ordered=state.plan?state.plan.sorted_tracks.map(a=>({path:a.filepath,analysis:a})):[];
+  for(const t of state.tracks)if(!ordered.some(x=>x.path===t.path))ordered.push(t);
+  if(ordered.some(t=>!t.path))throw new Error('음악 파일을 먼저 가져와야 합니다.');
+  const used=new Set((previous.materials||[]).map(m=>m.id));let serial=0;
+  const materials=ordered.map(t=>{
+    const old=previous.materials?.find(m=>m.kind==='track'&&m.source_path===t.path);
+    let id=old?.id;if(!id){do{id=`material-${serial++}`}while(used.has(id));used.add(id)}
+    return {...old,id,kind:'track',source_path:t.path,analysis:t.analysis||undefined};
+  });
+  const clips=state.arrangement.map(x=>({id:`clip-${x.index}`,material_id:materials[x.index].id,lane:x.lane,timeline_start:x.start,source_start:x.sourceStart,source_end:x.sourceEnd,gain:1,muted:false}));
+  return{schema_version:2,id:previous.id,created_at:previous.created_at,name:state.projectName,materials,clips,transitions:state.plan?.selections||[],settings:state.plan?.settings||mixSettings(),analysis_overrides:previous.analysis_overrides||[],evaluation_mode:state.evaluationMode};
+}
+async function saveProject(){
+  if(!state.port)return toast('프로젝트 저장은 데스크톱 앱에서 실행하세요.');
+  if(!state.tracks.length&&!state.plan)return toast('저장할 프로젝트가 없습니다.','error');
+  if(state.saving)return;
+  if(state.projectName==='Untitled Mix'){const n=prompt('프로젝트 이름','My Mix');if(!n)return;state.projectName=n;$('projectName').textContent=n}
+  state.saving=true;
+  try{
+    await upload();
+    const d=await request('/project/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(projectDocument())});
+    state.projectData=d.project;
+    toast(`저장됨: ${filename(d.path)}`,'ok');
+  }catch(e){friendlyError('프로젝트 저장',e)}finally{state.saving=false}
+}
 async function loadProject(){
   if(!state.port)return;
   try{
@@ -156,11 +182,12 @@ async function loadProject(){
     const p=await request('/project/load?name='+encodeURIComponent(name));
     if(!Array.isArray(p.materials)||!Array.isArray(p.transitions))throw new Error('invalid project');
     const tracks=p.materials.filter(m=>m.kind==='track').map(m=>({filename:filename(m.source_path),path:m.source_path,file:null,analysis:m.analysis}));
-    if(p.transitions.length&&(tracks.some(t=>!t.analysis)||p.transitions.length!==tracks.length-1))throw new Error('invalid project transitions');
+    const planTracks=p.clips?.length?p.clips.map(c=>tracks.find(t=>t.path===p.materials.find(m=>m.id===c.material_id)?.source_path)):tracks;
+    if(p.transitions.length&&(planTracks.some(t=>!t?.analysis)||p.transitions.length!==planTracks.length-1))throw new Error('invalid project transitions');
     stopPreview();listeningRequest?.abort();listeningRequest=null;$('audio').pause();$('audio').removeAttribute('src');$('audio').load();
     state.output=null;state.playhead=0;state.history=[];state.future=[];state.loop=false;state.selectedTrack=-1;
-    state.projectName=p.name;$('projectName').textContent=p.name;state.tracks=tracks;
-    state.plan=p.transitions.length?{sorted_tracks:tracks.map(t=>t.analysis),selections:p.transitions,alternatives:p.transitions.map(t=>[t]),score:{},evaluated:0,settings:p.settings}:null;
+    state.projectData=p;state.projectName=p.name;$('projectName').textContent=p.name;state.tracks=tracks;
+    state.plan=p.transitions.length?{sorted_tracks:planTracks.map(t=>t.analysis),selections:p.transitions,alternatives:p.transitions.map(t=>[t]),score:{},evaluated:0,settings:p.settings}:null;
     const settings=p.settings||{};
     for(const [id,key] of Object.entries({styleSelect:'style',depthSelect:'search_depth',transitionLength:'transition_length',phrasePriority:'phrase_priority',harmonicPriority:'harmonic_priority'})){if(settings[key]!==undefined)$(id).value=settings[key]}
     $('preserveOrder').checked=!!settings.preserve_order;
