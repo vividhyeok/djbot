@@ -27,3 +27,11 @@ test('preview plays the backend output and seeking uses the audio clock',async()
   vm.runInContext('seekBy(5)',h.ctx);assert.equal(vm.runInContext('state.preview.el.currentTime',h.ctx),5);
   vm.runInContext('stopPreview()',h.ctx);
 });
+
+test('cancelling whole mix preparation cannot start late playback',async()=>{
+  const h=harness();const job=vm.runInContext('togglePlay()',h.ctx);
+  await vm.runInContext('togglePlay()',h.ctx);
+  h.resolve({output_path:'listen.mp3'});await job;
+  assert.equal(vm.runInContext('state.output',h.ctx),null);
+  assert.equal(vm.runInContext('listeningRequest',h.ctx),null);
+});

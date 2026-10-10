@@ -65,3 +65,7 @@ Frontend `startLivePreview` now requests `/render/preview` and plays the shared 
 - New actual-PCM preview/export comparison initially failed (max sample error .0607). Skipping `atempo` for speed 1 reduced error; aligning control frames to 10 ms (441 samples) made the 3-second bass-swap fixture pass at <.0002 max error. This fixture is not proof of arbitrary-cue/all-effect parity; expand it.
 - `go test ./...`, `go vet ./...`, frontend syntax and 2 Node regression tests pass. rustfmt component is absent; compilation succeeds without it.
 - Local preexisting FFmpeg reports GPL configuration, whereas CI fetches LGPL. Local artifact is for validation; dependencies/notices and distribution license consistency remain to check before publishing.
+
+## Whole-set listening iteration
+
+Local repackaging finished successfully (session 41256); installer predates this iteration. Added `/render/listen` with content/plan keyed MP3 cache. Default Play now prepares and plays the entire mix without asking for an export filename; transition loop remains dedicated audition. Preparation can be cancelled without late-response playback, and edited plans invalidate pending results. Initial listening still waits for full rendering: progressive/bounded-latency playback remains required. Backend suite and frontend checks pass; cache/HTTP integration and desktop playback need verification. Windows CI run 38063234612 was still in progress at last inspection.

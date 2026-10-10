@@ -117,7 +117,26 @@ function interpolate(arr,time,fallback){if(!arr?.length)return fallback;if(time<
 function applyPreviewNow(){state.output=null;const p=state.preview;if(!p||!currentTransition())return;clearTimeout(p.timer);p.timer=setTimeout(()=>{if(state.preview===p)startLivePreview()},350)}
 function stopPreview(){const p=state.preview;if(!p)return;state.preview=null;clearTimeout(p.timer);p.controller?.abort();if(p.el){p.el.pause();p.el.removeAttribute('src');p.el.load()}setPlaying(false)}
 function toggleLoop(){if(state.selected<0)return toast('먼저 전환을 선택하세요.');state.loop=!state.loop;$('loopBtn').setAttribute('aria-pressed',String(state.loop));if(state.loop)startLivePreview();else stopPreview()}
-function togglePlay(){if(state.selected>=0){if(state.preview)stopPreview();else startLivePreview();return}const a=$('audio');if(!a.src)return toast('전환을 선택해 미리듣거나 Mix를 Export하세요.');a.paused?a.play():a.pause();setPlaying(!a.paused)}
+let listeningRequest=null;
+async function togglePlay(){
+  if(state.preview){stopPreview();return}
+  if(listeningRequest){listeningRequest.abort();listeningRequest=null;setPlaying(false);status('재생 준비 취소');return}
+  const audio=$('audio');
+  if(state.plan && !state.output){
+    const controller=new AbortController();listeningRequest=controller;setPlaying(true);status('전체 믹스 청취 준비 중');
+    const snapshot=JSON.stringify({playlist:playlist(),transitions:state.plan.selections});
+    try{
+      const result=await request('/render/listen',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,body:snapshot});
+      if(listeningRequest!==controller)return;
+      if(snapshot!==JSON.stringify({playlist:playlist(),transitions:state.plan.selections})){status('믹스가 변경되었습니다. 다시 재생하세요.');return}
+      state.output=result.output_path;audio.src=sourceFor(state.output);await audio.play();status('전체 믹스 재생 중','ok');
+    }catch(e){if(e.name!=='AbortError')friendlyError('믹스 재생',e)}
+    finally{if(listeningRequest===controller){listeningRequest=null;setPlaying(!audio.paused)}}
+    return;
+  }
+  if(!audio.src)return toast('음악을 추가하고 Auto Mix를 실행하세요.');
+  try{if(audio.paused)await audio.play();else audio.pause();setPlaying(!audio.paused)}catch(e){friendlyError('재생',e)}
+}
 function setPlaying(on){$('playBtn').textContent=on?'Ⅱ':'▶'}
 function quickAudition(i){if(!state.plan&&state.tracks[i]?.path){const a=$('audio');a.src=sourceFor(state.tracks[i].path);a.play().catch(()=>{});setPlaying(true)}}
 function seekBy(delta){if(state.preview){const el=state.preview.el;if(el)el.currentTime=clamp(el.currentTime+delta,0,Number.isFinite(el.duration)?el.duration:0)}else if($('audio').src)$('audio').currentTime=Math.max(0,$('audio').currentTime+delta);else seekMix(state.playhead+delta)}

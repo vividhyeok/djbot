@@ -77,6 +77,7 @@ func main() {
 	mux.HandleFunc("POST /plan", handlePlan)
 	mux.HandleFunc("POST /render/preview", handleRenderPreview)
 	mux.HandleFunc("POST /render/mix", handleRenderMix)
+	mux.HandleFunc("POST /render/listen", handleListen)
 	mux.HandleFunc("POST /download/youtube", handleDownloadYouTube)
 	mux.HandleFunc("GET /weights", handleGetWeights)
 	mux.HandleFunc("POST /weights", handleSaveWeights)

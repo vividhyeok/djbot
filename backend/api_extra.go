@@ -97,6 +97,7 @@ func handleCacheClear(w http.ResponseWriter, r *http.Request) {
 	// Only disposable, reproducible analysis and preview artifacts belong here.
 	clearPatternMatch(cacheDir, "preview_*.mp3")
 	clearPatternMatch(cacheDir, "preview_*.wav")
+	clearPatternMatch(cacheDir, "listen_*.mp3")
 	clearPatternMatch(cacheDir, "*_analysis_v*.json")
 	// Also clean up any _preview.mp3 and _analysis.json files in cache root if they got placed there
 	clearPatternMatch(cacheDir, "*_preview.mp3")
