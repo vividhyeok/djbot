@@ -252,7 +252,7 @@ func anchors(t TrackAnalysis, entry bool) []float64 {
 		if entry {
 			return []float64{0}
 		}
-		return []float64{math.Max(0, t.Duration-30)}
+		return []float64{math.Max(t.Duration*.75, t.Duration-30)}
 	}
 	if len(out) > 8 {
 		step := len(out) / 8

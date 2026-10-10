@@ -69,3 +69,7 @@ Frontend `startLivePreview` now requests `/render/preview` and plays the shared 
 ## Whole-set listening iteration
 
 Local repackaging finished successfully (session 41256); installer predates this iteration. Added `/render/listen` with content/plan keyed MP3 cache. Default Play now prepares and plays the entire mix without asking for an export filename; transition loop remains dedicated audition. Preparation can be cancelled without late-response playback, and edited plans invalidate pending results. Initial listening still waits for full rendering: progressive/bounded-latency playback remains required. Backend suite and frontend checks pass; cache/HTTP integration and desktop playback need verification. Windows CI run 38063234612 was still in progress at last inspection.
+
+## Multi-track regression and CI repair
+
+CI 38063234612 failed because Node 20 on Windows did not expand `tests/*.test.js`; changed test command to Node's built-in discovery (`node --test`). Added generated-plan tests for 2/3/12 tracks at .4/3/12/180 seconds. They exposed conflicting middle-track cues for short material: fallback exit anchor was zero. Fixed fallback to retain at least 75% of the track before exit. All combinations now satisfy the real timeline validator. An actual 12-track, 3-second synthetic-tone WAV render verifies duration (<2 ms drift), finite/unclipped samples and audible content in each track region. This does not establish musical quality on real music. Frontend tests and full Go suite pass locally.
